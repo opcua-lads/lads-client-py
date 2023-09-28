@@ -1,17 +1,10 @@
 import asyncio
 import logging
-
+from typing import Type
 from asyncua import Client, ua, Node
-_logger = logging.getLogger(__name__)
-
-async def get_parents(node: Node, root_node: Node = None) -> list[Node]:
-    parent = await node.get_parent()
-    if parent == root_node:
-        return []
-    else:
-        return [parent] + await get_parents(parent, root_node)
-
 from enum import IntEnum
+
+_logger = logging.getLogger(__name__)
 
 class ObjectIds(IntEnum):
     DeviceType = 1002
@@ -21,7 +14,6 @@ class ObjectIds(IntEnum):
     AnalogSensorFunctionType = 1016
     AnalogControlFuntionType = 1009
     CoverFunctionType = 1011
-
 
 class SubHandler(object):
     def datachange_notification(self, node, val, data):
@@ -46,7 +38,7 @@ class Server():
         self.server = self
         self.devices: list[Device] = []
 
-    async def _init(self):
+    async def init(self):
         # read namespace indices
         self.ns_DI = await self.client.get_namespace_index("http://opcfoundation.org/UA/DI/")
         self.ns_AMB = await self.client.get_namespace_index("http://opcfoundation.org/UA/AMB/")
@@ -70,7 +62,7 @@ class Server():
         device_set = await self.client.nodes.objects.get_child(f"{self.ns_DI}:DeviceSet")
         nodes = await device_set.get_children(refs = ua.ObjectIds.HasChild, nodeclassmask = ua.NodeClass.Object)
         for node in nodes:
-            device: Device = await create_lads_node(Device, self, node)
+            device: Device = await propagate_to_Device(node, self)
             self.devices.append(device)
 
     def get_lads_node(self, id: int) -> Node | None:
@@ -78,164 +70,161 @@ class Server():
     
 async def create_lads_server(client: Client, uri: str) -> Server:
     server = Server(client, uri)
-    await server._init()
+    await server.init()
     return server
+
+async def get_parents(node: Node, root_node: Node = None) -> list[Node]:
+    parent = await node.get_parent()
+    if parent == root_node:
+        return [parent]
+    else:
+        return [parent] + await get_parents(parent, root_node)
+
+async def browse_types(node: Node) -> list[Node]:
+    type_node_id =  await node.read_type_definition()
+    type_node = Node(node.session, type_node_id)
+    root_node = Server.BaseObjectType
+    node_class = await node.read_node_class()
+    if node_class == ua.NodeClass.Variable:
+        root_node = Server.BaseVariableType
+    else:
+        root_node = Server.BaseObjectType
+    return [type_node] + await get_parents(type_node, root_node)
+
+async def is_of_type(node: Node, type_node: Node) -> bool:
+    types = await browse_types(node)
+    return type_node in types
 
 class LADSNode(Node):
 
-    def __init__(self, session, nodeid: ua.NodeId):
-        super().__init__(session, nodeid)
-        self.type_nodes = None
-        self.server: Server = None
-        
-    # propagate from Node
-    @classmethod
-    def from_Node(cls, server: Server, node: Node):
-        lads_node = cls(node.session, node.nodeid)
-        lads_node.server = server
-        for key, value in node.__dict__.items():
-            lads_node.__dict__[key] = value
-        return lads_node
-    
-    async def _init(self, parent: Node):
+    async def init(self, server: Server):
+        self.server: Server = server
         self.browse_name = await self.read_browse_name()
 
     def __str__(self):
         return f"{__class__} {self.browse_name}"
 
-    async def is_of_type(self, type_node: Node) -> bool:
-        if self.type_nodes is None:
-            self.type_nodes = await self._browse_types()
-        for node in self.type_nodes:
-            if node == type_node:
-                return True
-        return False
-
-    async def _browse_types(self) -> list[Node]:
-        type_node_id =  await self.read_type_definition()
-        type_node = Node(self.session, type_node_id)
-        root_node = Server.BaseObjectType
-        node_class = await self.read_node_class()
-        if node_class == ua.NodeClass.Variable:
-            root_node = Server.BaseVariableType
-        else:
-            root_node = Server.BaseObjectType
-        return [type_node] + await get_parents(type_node, root_node)
-    
     async def get_lads_child(self, name : str) -> Node:
         return await self.get_child(ua.QualifiedName(name, self.server.ns_LADS))
 
-async def create_lads_node(cls, server: Server, node: Node, parent: LADSNode = None) -> LADSNode:
-    lads_node: LADSNode = cls.from_Node(server, node)
-    await lads_node._init(parent)
-    return lads_node
-    
 class Device(LADSNode):
 
-    def __init__(self, session, nodeid: ua.NodeId):
-        super().__init__(session, nodeid)
-
-    def __str__(self):
-        return f"Device(BrowseName={self.browse_name})"
-
-    async def _init(self, parent: LADSNode):
-        await super()._init(parent)
-        assert await self.is_of_type(Server.DeviceType)
+    async def init(self, server: Server):
+        await super().init(server)
         functional_unit_set = await self.get_lads_child("FunctionalUnitSet")
         nodes = await functional_unit_set.get_children(refs = ua.ObjectIds.HasChild, nodeclassmask = ua.NodeClass.Object)
         self.functional_units: list[FunctionalUnit] = []
         for node in nodes:
-            functional_unit: FunctionalUnit = await create_lads_node(FunctionalUnit, self.server, node, self)
+            functional_unit: FunctionalUnit = await propagate_to_FunctionalUnit(node, server)
             self.functional_units.append(functional_unit)
 
 class FunctionalUnit(LADSNode):
-    def __str__(self):
-        return f"FunctionalUnit(BrowseName={self.browse_name})"
 
-    async def _init(self, parent: LADSNode):
-        await super()._init(parent)
-        assert await self.is_of_type(Server.FunctionalUnitType)
-        self.parent: Device = parent
+    async def init(self, server: Server):
+        await super().init(server)
         self.subscription_handler = SubHandler()
-        self.subscription = await self.server.client.create_subscription(500, self.subscription_handler)
+        self.subscription = await server.client.create_subscription(500, self.subscription_handler)
         function_set = await self.get_lads_child("FunctionSet")
         nodes = await function_set.get_children(refs = ua.ObjectIds.HasChild, nodeclassmask = ua.NodeClass.Object)
         self.functions: list[Function] = []
         for node in nodes:
-            abstract_function: Function = await create_function(self, node)
-            function = abstract_function
-            if await abstract_function.is_of_type(Server.AnalogControlFuntionType):
-                function: AnalogControlFunction = await create_lads_node(AnalogControlFunction, self.server, function, self)
-            elif await abstract_function.is_of_type(Server.AnalogSensorFunctionType):
-                function: AnalogSensorFunction = await create_lads_node(AnalogSensorFunction, self.server, function, self)
+            types = await browse_types(node)
+            if Server.AnalogControlFuntionType in types:
+                function: AnalogControlFunction = await propagate_to_AnalogControlFunction(node, server)
+            elif Server.AnalogSensorFunctionType in types:
+                function: AnalogSensorFunction = await propagate_to_AnalogSensorFunction(node, server)
             else:
-                function = abstract_function
+                function = await propagate_to_Function(node, server)
             self.functions.append(function)
 
 class Function(LADSNode):
 
-    async def _init(self, parent: LADSNode):
-        await super()._init(parent)
-        self.parent: FunctionalUnit | Function = parent
-        assert await self.is_of_type(Server.FunctionType)
-        self.is_enabled = await self.get_lads_child("IsEnabled")
+    async def init(self, server: Server):
+        await super().init(server)
+        node = await self.get_lads_child("IsEnabled")
+        self.is_enabled = await propagate_to_BaseVariable(node, server)
 
-    @property
-    def subscription(self):
-        return self.parent.subscription
-
-async def create_function(parent: FunctionalUnit | Function, node: Node) -> Function:
-    return await create_lads_node(Function, parent.server, node, parent) 
-
-class AnalogItem(LADSNode):
+class BaseVariable(LADSNode):
     def __str__(self):
-        return f"AnalogItem(BrowseName={self.browse_name}) = {self.value} [{self.eu.DisplayName.Text}]"
+        return f"BaseVariable(BrowseName={self.browse_name}) = {self.value}"
     
-    async def _init(self, parent: LADSNode):
-        await super()._init(parent)
-        assert await self.is_of_type(Server.AnalogItemType)
-        self.parent: Function = parent
+    async def init(self, server: Server):
+        await super().init(server)
         self.value = await self.get_value()
-        self.eu: ua.EUInformation = None
-        self.range: ua.Range = None
+
+class AnalogItem(BaseVariable):
+    def __str__(self):
+        return f"AnalogItem(BrowseName={self.browse_name}) = {self.value} [{self.engineering_units.DisplayName.Text}]"
+    
+    async def init(self, server: Server):
+        await super().init(server)
+        self.engineering_units: ua.EUInformation = None
+        self.eu_range: ua.Range = None
         try:
             self.engineering_units = await self.get_child("EngineeringUnits")
         except:
             pass
         finally:
-            self.eu: ua.EUInformation = await self.engineering_units.get_value()
+            self.engineering_units: ua.EUInformation = await self.engineering_units.get_value()
         try:
             self.eu_range = await self.get_child("EURange")
         except:
             pass
         finally:
-            self.range: ua.Range = await self.eu_range.get_value()
-
-async def create_analog_item(parent: Function, name: str) -> AnalogItem: 
-    return await create_lads_node(AnalogItem, parent.server, await parent.get_lads_child(name), parent)
+            self.eu_range: ua.Range = await self.eu_range.get_value()
 
 class AnalogControlFunction(Function):
     def __str__(self):
         return f"AnalogControlFunction(BrowseName={self.browse_name})\n  {self.current_value}\n  {self.target_value}"
     
-    async def _init(self, parent: LADSNode):
-        await super()._init(parent)
-        assert await self.is_of_type(Server.AnalogControlFuntionType)
+    async def init(self, server: Server):
+        await super().init(server)        
         state_machine = await self.get_lads_child("StateMachine")
         self.current_state = await state_machine.get_child("CurrentState")
-        self.current_value = await create_analog_item(self, "CurrentValue")
-        self.target_value = await create_analog_item(self, "TargetValue")
-        handler = await self.subscription.subscribe_data_change([self.current_state, self.target_value, self.current_value])
+        self.current_value = await get_lads_analog_item(self, "CurrentValue")
+        self.target_value = await get_lads_analog_item(self, "TargetValue")
+        # handler = await self.subscription.subscribe_data_change([self.current_state, self.target_value, self.current_value])
 
 class AnalogSensorFunction(Function):
     def __str__(self):
         return f"AnalogSensorFunction(BrowseName={self.browse_name})\n  {self.sensor_value}"
     
-    async def _init(self, parent: LADSNode):
-        await super()._init(parent)
-        assert await self.is_of_type(Server.AnalogSensorFunctionType)
-        self.sensor_value = await create_analog_item(self, "SensorValue")
-        handler = await self.subscription.subscribe_data_change([self.sensor_value])
+    async def init(self, server: Server):
+        await super().init(server)        
+        self.sensor_value = await get_lads_analog_item(self, "SensorValue")
+        # handler = await self.subscription.subscribe_data_change([self.sensor_value])
+
+async def propagate_to(cls: Type, node: Node, type_node: Node, server: Server) -> LADSNode:
+    assert await is_of_type(node, type_node)
+    node.__class__ = cls
+    propagated_node : cls = node
+    await propagated_node.init(server)
+    return propagated_node
+
+async def propagate_to_BaseVariable(node: Node, server: Server) -> BaseVariable:
+    return await propagate_to(BaseVariable, node, Server.BaseVariableType, server)
+
+async def propagate_to_AnalogItem(node: Node, server: Server) -> AnalogItem:
+    return await propagate_to(AnalogItem, node, Server.AnalogItemType, server)
+
+async def propagate_to_Device(node: Node, server: Server) -> Device:
+    return await propagate_to(Device, node, Server.DeviceType, server)
+
+async def propagate_to_FunctionalUnit(node: Node, server: Server) -> FunctionalUnit:
+    return await propagate_to(FunctionalUnit, node, Server.FunctionalUnitType, server)
+
+async def propagate_to_Function(node: Node, server: Server) -> Function:
+    return await propagate_to(Function, node, Server.FunctionType, server)
+
+async def propagate_to_AnalogControlFunction(node: Node, server: Server) -> AnalogControlFunction:
+    return await propagate_to(AnalogControlFunction, node, Server.AnalogControlFuntionType, server)
+
+async def propagate_to_AnalogSensorFunction(node: Node, server: Server) -> AnalogControlFunction:
+    return await propagate_to(AnalogSensorFunction, node, Server.AnalogSensorFunctionType, server)
+
+async def get_lads_analog_item(parent: LADSNode, name: str) -> AnalogItem:
+    node = await parent.get_lads_child(name)
+    return await propagate_to_AnalogItem(node, parent.server)
 
 async def main():
     url = "opc.tcp://localhost:26543"
