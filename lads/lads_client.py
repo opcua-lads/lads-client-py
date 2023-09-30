@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Type
+from typing import Type, NewType
 from asyncua import Client, ua, Node
 from enum import IntEnum
 
@@ -142,6 +142,8 @@ class Device(LADSNode):
             functional_unit: FunctionalUnit = await propagate_to_FunctionalUnit(node, server)
             self.functional_units.append(functional_unit)
 
+Function = NewType("Function", LADSNode)
+
 class FunctionSet(LADSSet):
 
     async def init(self, server: Server):
@@ -164,11 +166,13 @@ class FunctionalUnit(LADSNode):
         await super().init(server)
         self.subscription_handler = SubHandler()
         self.subscription = await server.client.create_subscription(500, self.subscription_handler)
-        self.function_set = await self.get_lads_child("FunctionSet")
-        self.functions = None
+        self.function_set: FunctionSet = await self.get_lads_child("FunctionSet")
         if self.function_set is not None:
-            self.function_set = await propagate_to_FunctionSet(self.function_set, server, self)
-            self.functions = self.function_set.functions
+            self.function_set = await propagate_to_FunctionSet(self.function_set, server)
+
+    @property
+    def functions(self) -> list[Function]:
+        return self.function_set.functions
     
 class Function(LADSNode):
 
@@ -176,12 +180,14 @@ class Function(LADSNode):
         await super().init(server)
         node = await self.get_lads_child("IsEnabled")
         self.is_enabled = await propagate_to_BaseVariable(node, server)
-        self.functions = None
-        self.function_set = await self.get_lads_child("FunctionSet")
+        self.function_set: FunctionSet = await self.get_lads_child("FunctionSet")
         if self.function_set is not None:
             self.function_set = await propagate_to_FunctionSet(self.function_set, server)
-            self.functions = self.function_set.functions
 
+    @property
+    def functions(self) -> list[Function]:
+        return self.function_set.functions
+    
 class BaseVariable(LADSNode):
     def __str__(self):
         return f"BaseVariable(BrowseName={self.display_name}) = {self.value}"
@@ -221,7 +227,7 @@ class AnalogControlFunction(Function):
         self.current_state = await state_machine.get_child("CurrentState")
         self.current_value = await get_lads_analog_item(self, "CurrentValue")
         self.target_value = await get_lads_analog_item(self, "TargetValue")
-        handler = await self.subscription.subscribe_data_change([self.current_state, self.target_value, self.current_value])
+        # handler = await self.subscription.subscribe_data_change([self.current_state, self.target_value, self.current_value])
 
 class AnalogSensorFunction(Function):
     def __str__(self):
@@ -254,7 +260,7 @@ async def propagate_to_FunctionSet(node: Node, server: Server) -> FunctionSet:
 async def propagate_to_FunctionalUnit(node: Node, server: Server) -> FunctionalUnit:
     return await propagate_to(FunctionalUnit, node, Server.FunctionalUnitType, server)
 
-async def propagate_to_Function(node: Node, server: Server, functional_unit: FunctionalUnit) -> Function:
+async def propagate_to_Function(node: Node, server: Server) -> Function:
     return await propagate_to(Function, node, Server.FunctionType, server)
 
 async def propagate_to_AnalogControlFunction(node: Node, server: Server) -> AnalogControlFunction:
