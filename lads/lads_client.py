@@ -9,7 +9,9 @@ _logger = logging.getLogger(__name__)
 class ObjectIds(IntEnum):
     DeviceType = 1002
     ComponentType = 1024
+    FunctionalUnitSetType = 1023
     FunctionalUnitType= 1003
+    FunctionSetType = 1026
     FunctionType= 1004
     AnalogSensorFunctionType = 1016
     AnalogControlFuntionType = 1009
@@ -26,7 +28,9 @@ class Server():
     BaseObjectType: Node
     DeviceType: Node
     ComponentType: Node
+    FunctionalUnitSetType: Node
     FunctionalUnitType: Node
+    FunctionSetType: Node
     FunctionType: Node
     AnalogSensorFunctionType: Node
     AnalogControlFuntionType: Node
@@ -52,7 +56,9 @@ class Server():
         Server.AnalogItemType = self.client.get_node(ua.ObjectIds.AnalogItemType)
         Server.DeviceType = self.get_lads_node(ObjectIds.DeviceType)
         Server.ComponentType = self.get_lads_node(ObjectIds.ComponentType)
+        Server.FunctionalUnitSetType = self.get_lads_node(ObjectIds.FunctionalUnitSetType)
         Server.FunctionalUnitType = self.get_lads_node(ObjectIds.FunctionalUnitType)
+        Server.FunctionSetType = self.get_lads_node(ObjectIds.FunctionSetType)
         Server.FunctionType = self.get_lads_node(ObjectIds.FunctionType)
         Server.AnalogSensorFunctionType = self.get_lads_node(ObjectIds.AnalogSensorFunctionType)
         Server.AnalogControlFuntionType = self.get_lads_node(ObjectIds.AnalogControlFuntionType)
@@ -105,7 +111,10 @@ class LADSNode(Node):
         return f"{__class__} {self.browse_name}"
 
     async def get_lads_child(self, name : str) -> Node:
-        return await self.get_child(ua.QualifiedName(name, self.server.ns_LADS))
+        try:
+            return await self.get_child(ua.QualifiedName(name, self.server.ns_LADS))
+        except:
+            return None
 
 class Device(LADSNode):
 
@@ -118,14 +127,11 @@ class Device(LADSNode):
             functional_unit: FunctionalUnit = await propagate_to_FunctionalUnit(node, server)
             self.functional_units.append(functional_unit)
 
-class FunctionalUnit(LADSNode):
+class FunctionSet(LADSNode):
 
     async def init(self, server: Server):
         await super().init(server)
-        self.subscription_handler = SubHandler()
-        self.subscription = await server.client.create_subscription(500, self.subscription_handler)
-        function_set = await self.get_lads_child("FunctionSet")
-        nodes = await function_set.get_children(refs = ua.ObjectIds.HasChild, nodeclassmask = ua.NodeClass.Object)
+        nodes = await self.get_children(refs = ua.ObjectIds.HasChild, nodeclassmask = ua.NodeClass.Object)
         self.functions: list[Function] = []
         for node in nodes:
             types = await browse_types(node)
@@ -137,12 +143,25 @@ class FunctionalUnit(LADSNode):
                 function = await propagate_to_Function(node, server)
             self.functions.append(function)
 
+class FunctionalUnit(LADSNode):
+
+    async def init(self, server: Server):
+        await super().init(server)
+        self.subscription_handler = SubHandler()
+        self.subscription = await server.client.create_subscription(500, self.subscription_handler)
+        self.function_set = await self.get_lads_child("FunctionSet")
+        if self.function_set is not None:
+            self.function_set = await propagate_to_FunctionSet(self.function_set, server)
+    
 class Function(LADSNode):
 
     async def init(self, server: Server):
         await super().init(server)
         node = await self.get_lads_child("IsEnabled")
         self.is_enabled = await propagate_to_BaseVariable(node, server)
+        self.function_set = await self.get_lads_child("FunctionSet")
+        if self.function_set is not None:
+            self.function_set = await propagate_to_FunctionSet(self.function_set, server)
 
 class BaseVariable(LADSNode):
     def __str__(self):
@@ -210,6 +229,9 @@ async def propagate_to_AnalogItem(node: Node, server: Server) -> AnalogItem:
 async def propagate_to_Device(node: Node, server: Server) -> Device:
     return await propagate_to(Device, node, Server.DeviceType, server)
 
+async def propagate_to_FunctionSet(node: Node, server: Server) -> FunctionSet:
+    return await propagate_to(FunctionSet, node, Server.FunctionSetType, server)
+
 async def propagate_to_FunctionalUnit(node: Node, server: Server) -> FunctionalUnit:
     return await propagate_to(FunctionalUnit, node, Server.FunctionalUnitType, server)
 
@@ -251,8 +273,8 @@ async def main():
             print (device)
             for functional_unit in device.functional_units:
                 print(functional_unit)
-                for function in functional_unit.functions:
-                    print(function)
+                for function in functional_unit.function_set.functions:
+                    print(function) 
 
 
         functionalUnit = server.devices[0].functional_units[0]
