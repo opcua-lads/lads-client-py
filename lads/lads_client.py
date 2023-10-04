@@ -1,9 +1,9 @@
 import asyncio
 import logging
-from typing import Type, NewType, Any, Union
+from typing import Type, NewType, Any
 from asyncua import Client, ua, Node
-from asyncua.common.session_interface import AbstractSession
-from asyncua.common.subscription import Subscription, SubscriptionItemData, DataChangeNotif
+from asyncua.common.subscription import DataChangeNotif
+from asyncua.common.events import Event
 from enum import IntEnum
 
 _logger = logging.getLogger(__name__)
@@ -106,21 +106,32 @@ class SubscriptionHandler(object):
         super().__init__()
         self.subscription = None
         self.subscribed_variables = None
+        self.event_node = None
+        self.events: list[Event] = []
 
     async def subscribe_data_change(self, server: Server, nodes: list[Node], period: float = 500):
         if self.subscription is None:
             self.subscription = await server.client.create_subscription(period, self)
         self.subscribed_variables = dict((node.nodeid, node) for node in nodes)
         return await self.subscription.subscribe_data_change(nodes)        
-
+ 
+    async def subscribe_events(self, server: Server, node: Node, period: float = 500):
+        if self.subscription is None:
+            self.subscription = await server.client.create_subscription(period, self)
+        self.event_node: LADSNode = node
+        return await self.subscription.subscribe_events(node)        
+ 
     def datachange_notification(self, node: Node, val: Any, data: DataChangeNotif):
         variable = self.subscribed_variables[node.nodeid]
         assert(variable is not None)
         variable.data_change_notification(data)
         print(f"{variable.display_name} = {val}")
 
-    def event_notification(self, event):
-        print("New event", event)
+    def event_notification(self, event: Event):
+        self.events.append(event)
+        if len(self.events) > 1000:
+            self.events.pop(0)
+        print(f"{self.event_node.display_name}", event.__dict__["Message"])
 
 class LADSNode(Node):
 
@@ -138,7 +149,6 @@ class LADSNode(Node):
 
     def event_notification(self, event):
         print("New event", event)
-
 
     @property
     def display_name(self) -> str:
@@ -208,11 +218,19 @@ class Device(Component):
         for functional_unit in self.functional_units:
             await functional_unit.finalize_init()
         self.subscription_handler = SubscriptionHandler()
-        handler = await self.subscription_handler.subscribe_data_change(self.server, self.variables)
+        await self.subscription_handler.subscribe_data_change(self.server, self.variables)
+        await self.subscription_handler.subscribe_events(self.server, self)
 
     @property
     def variables(self) ->list[Node]:
         return super().variables
+
+    @property
+    def events(self) ->list[Event]:
+        if self.subscription_handler is not None:
+            return self.subscription_handler.events
+        else:
+            return []
 
 class FunctionSet(LADSSet):
 
@@ -258,12 +276,20 @@ class FunctionalUnit(LADSNode):
             variables = self.function_set.all_variables
             nodes = nodes + variables
         self.subscription_handler = SubscriptionHandler()
-        handler = await self.subscription_handler.subscribe_data_change(self.server, nodes)
+        await self.subscription_handler.subscribe_data_change(self.server, nodes)
+        await self.subscription_handler.subscribe_events(self.server, self)
 
     @property
     def functions(self) -> list[Function]:
         return self.function_set.functions
     
+    @property
+    def events(self) ->list[Event]:
+        if self.subscription_handler is not None:
+            return self.subscription_handler.events
+        else:
+            return []
+
 class Function(LADSNode):
 
     async def init(self, server: Server):
@@ -371,11 +397,7 @@ class AnalogSensorFunction(Function):
     def variables(self) ->list[Node]:
         return super().variables + [self.sensor_value]
 
-class CoverFunction(Function):
-    def __init__(self, session: AbstractSession, nodeid: Node):
-         super().__init__(session, nodeid)
-         self.current_state: BaseVariable = None
-
+class CoverFunction(Function):    
     def __str__(self):
         return f"CoverFunction({self.display_name})\n  {self.current_state.value}"
        
