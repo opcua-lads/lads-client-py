@@ -1,7 +1,8 @@
 import asyncio
 import logging
-from typing import Type, NewType, Any
+from typing import Type, NewType, Any, Union
 from asyncua import Client, ua, Node
+from asyncua.common.session_interface import AbstractSession
 from asyncua.common.subscription import Subscription, SubscriptionItemData, DataChangeNotif
 from enum import IntEnum
 
@@ -16,6 +17,7 @@ class ObjectIds(IntEnum):
     FunctionType= 1004
     AnalogSensorFunctionType = 1016
     AnalogControlFuntionType = 1009
+    StartStopControlFunctionType = 1032
     CoverFunctionType = 1011
 
 class Server():
@@ -28,6 +30,7 @@ class Server():
     FunctionType: Node
     AnalogSensorFunctionType: Node
     AnalogControlFuntionType: Node
+    StartStopControlFunctionType: Node
     CoverFunctionType: Node
 
     def __init__(self, client: Client, uri: str) -> None:
@@ -56,7 +59,8 @@ class Server():
         Server.FunctionType = self.get_lads_node(ObjectIds.FunctionType)
         Server.AnalogSensorFunctionType = self.get_lads_node(ObjectIds.AnalogSensorFunctionType)
         Server.AnalogControlFuntionType = self.get_lads_node(ObjectIds.AnalogControlFuntionType)
-        Server.CoverControlFunctionType = self.get_lads_node(ObjectIds.CoverFunctionType)
+        Server.StartStopControlFunctionType = self.get_lads_node(ObjectIds.StartStopControlFunctionType)
+        Server.CoverFunctionType = self.get_lads_node(ObjectIds.CoverFunctionType)
 
         # browse for devices in DeviceSet
         device_set = await self.client.nodes.objects.get_child(f"{self.ns_DI}:DeviceSet")
@@ -74,12 +78,12 @@ async def create_lads_server(client: Client, uri: str) -> Server:
     await server.init()
     return server
 
-async def get_parents(node: Node, root_node: Node = None) -> list[Node]:
+async def get_parent_nodes(node: Node, root_node: Node = None) -> list[Node]:
     parent = await node.get_parent()
     if parent == root_node:
         return [parent]
     else:
-        return [parent] + await get_parents(parent, root_node)
+        return [parent] + await get_parent_nodes(parent, root_node)
 
 async def browse_types(node: Node) -> list[Node]:
     type_node_id =  await node.read_type_definition()
@@ -90,15 +94,30 @@ async def browse_types(node: Node) -> list[Node]:
         root_node = Server.BaseVariableType
     else:
         root_node = Server.BaseObjectType
-    return [type_node] + await get_parents(type_node, root_node)
+    return [type_node] + await get_parent_nodes(type_node, root_node)
 
 async def is_of_type(node: Node, type_node: Node) -> bool:
     types = await browse_types(node)
     return type_node in types
 
-class SubHandler(object):
-    def datachange_notification(self, node, val, data):
-        print("New data change event", node, val)
+class SubscriptionHandler(object):
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.subscription = None
+        self.subscribed_variables = None
+
+    async def subscribe_data_change(self, server: Server, nodes: list[Node], period: float = 500):
+        if self.subscription is None:
+            self.subscription = await server.client.create_subscription(period, self)
+        self.subscribed_variables = dict((node.nodeid, node) for node in nodes)
+        return await self.subscription.subscribe_data_change(nodes)        
+
+    def datachange_notification(self, node: Node, val: Any, data: DataChangeNotif):
+        variable = self.subscribed_variables[node.nodeid]
+        assert(variable is not None)
+        variable.data_change_notification(data)
+        print(f"{variable.display_name} = {val}")
 
     def event_notification(self, event):
         print("New event", event)
@@ -186,10 +205,10 @@ class Device(Component):
 
     async def finalize_init(self):
         await super().finalize_init()
-        self.subscription = await self.server.client.create_subscription(500, SubHandler())
-        handler = await self.subscription.subscribe_data_change(self.variables)
         for functional_unit in self.functional_units:
             await functional_unit.finalize_init()
+        self.subscription_handler = SubscriptionHandler()
+        handler = await self.subscription_handler.subscribe_data_change(self.server, self.variables)
 
     @property
     def variables(self) ->list[Node]:
@@ -207,6 +226,10 @@ class FunctionSet(LADSSet):
                 function: AnalogControlFunction = await propagate_to_AnalogControlFunction(node, server)
             elif Server.AnalogSensorFunctionType in types:
                 function: AnalogSensorFunction = await propagate_to_AnalogSensorFunction(node, server)
+            elif Server.CoverFunctionType in types:
+                function: CoverFunction = await propagate_to_CoverFunction(node, server)
+            elif Server.StartStopControlFunctionType in types:
+                function: StartStopControlFunction = await propagate_to_StartStopControlFunction(node, server)
             else:
                 function = await propagate_to_Function(node, server)
             self.functions.append(function)
@@ -230,19 +253,12 @@ class FunctionalUnit(LADSNode):
 
     async def finalize_init(self):
         await super().finalize_init()
-        self.subscription = await self.server.client.create_subscription(500, self)
         nodes = self.variables
         if self.function_set is not None:
             variables = self.function_set.all_variables
             nodes = nodes + variables
-        self.subscribed_variables = dict((node.nodeid, node) for node in nodes)
-        handler = await self.subscription.subscribe_data_change(nodes)
-
-    def datachange_notification(self, node: Node, val: Any, data: DataChangeNotif):
-        variable = self.subscribed_variables[node.nodeid]
-        assert(variable is not None)
-        variable.data_change_notification(data)
-        print(f"{self.display_name}.{variable.display_name} = {val}")
+        self.subscription_handler = SubscriptionHandler()
+        handler = await self.subscription_handler.subscribe_data_change(self.server, nodes)
 
     @property
     def functions(self) -> list[Function]:
@@ -326,9 +342,13 @@ class BaseControlFunction(Function):
     def variables(self) ->list[Node]:
         return super().variables + [self.current_state]
 
+class StartStopControlFunction(BaseControlFunction):
+    def __str__(self):
+        return f"StartStopControlFunction({self.display_name})\n  {self.current_state}"
+    
 class AnalogControlFunction(BaseControlFunction):
     def __str__(self):
-        return f"AnalogControlFunction(BrowseName={self.display_name})\n  {self.current_value}\n  {self.target_value}"
+        return f"AnalogControlFunction({self.display_name})\n  {self.current_state}\n  {self.current_value}\n  {self.target_value}"
     
     async def init(self, server: Server):
         await super().init(server)        
@@ -350,6 +370,23 @@ class AnalogSensorFunction(Function):
     @property
     def variables(self) ->list[Node]:
         return super().variables + [self.sensor_value]
+
+class CoverFunction(Function):
+    def __init__(self, session: AbstractSession, nodeid: Node):
+         super().__init__(session, nodeid)
+         self.current_state: BaseVariable = None
+
+    def __str__(self):
+        return f"CoverFunction({self.display_name})\n  {self.current_state.value}"
+       
+    async def init(self, server: Server):
+        await super().init(server)        
+        state_machine = await self.get_lads_child("StateMachine")
+        self.current_state: BaseVariable = await propagate_to_BaseVariable(await state_machine.get_child("CurrentState"), server)
+
+    @property
+    def variables(self) ->list[Node]:
+        return super().variables + [self.current_state]
 
 async def propagate_to(cls: Type, node: Node, type_node: Node, server: Server) -> LADSNode:
     if node is None: return None
@@ -377,11 +414,17 @@ async def propagate_to_FunctionalUnit(node: Node, server: Server) -> FunctionalU
 async def propagate_to_Function(node: Node, server: Server) -> Function:
     return await propagate_to(Function, node, Server.FunctionType, server)
 
+async def propagate_to_StartStopControlFunction(node: Node, server: Server) -> StartStopControlFunction:
+    return await propagate_to(StartStopControlFunction, node, Server.StartStopControlFunctionType, server)
+
 async def propagate_to_AnalogControlFunction(node: Node, server: Server) -> AnalogControlFunction:
     return await propagate_to(AnalogControlFunction, node, Server.AnalogControlFuntionType, server)
 
 async def propagate_to_AnalogSensorFunction(node: Node, server: Server) -> AnalogControlFunction:
     return await propagate_to(AnalogSensorFunction, node, Server.AnalogSensorFunctionType, server)
+
+async def propagate_to_CoverFunction(node: Node, server: Server) -> CoverFunction:
+    return await propagate_to(CoverFunction, node, Server.CoverFunctionType, server)
 
 async def get_lads_analog_item(parent: LADSNode, name: str) -> AnalogItem:
     node = await parent.get_lads_child(name)
@@ -422,14 +465,9 @@ async def main():
         functionalUnit = server.devices[0].functional_units[0]
         functionSet = await functionalUnit.get_child(["5:FunctionSet"])
         temperatureController = await functionSet.get_child(["6:TemperatureController"])
-        # setting up AnalogControlfunction
-        temperatureSP = await temperatureController.get_child(["5:TargetValue"])
-        temperaturePV = await temperatureController.get_child(["5:CurrentValue"])
-        temperatureState = await temperatureController.get_child(["5:StateMachine", "0:CurrentState"])
-
 
         # subscribing to a variable node
-        handler = SubHandler()
+        handler = SubscriptionHandler()
         sub = await client.create_subscription(100, handler)
         #handle = await sub.subscribe_data_change([temperatureSP, temperaturePV, temperatureState])
         await asyncio.sleep(0.1)
