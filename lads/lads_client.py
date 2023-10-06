@@ -137,9 +137,11 @@ class LADSNode(Node):
 
     async def init(self, server: Server):
         self.server: Server = server
-        self.browse_name = await self.read_browse_name()
-        self._display_name = await self.read_display_name()
-        self.description = await self.read_description()
+        (self.browse_name, self._display_name, self.description)  = await asyncio.gather(
+            self.read_browse_name(),
+            self.read_display_name(),
+            self.read_description()
+        )
 
     async def finalize_init(self):
         pass
@@ -179,6 +181,18 @@ class LADSNode(Node):
     async def get_lads_child(self, name : str) -> Node:
             return await self.get_child_or_none(ua.QualifiedName(name, self.server.ns_LADS))
     
+    async def get_child_objects(self, parent: Node = None) -> list[Node]:
+        if parent is None: parent = self
+        # search for HasChild and Organizes references
+        (has_child_objects, organizes_objects) = await asyncio.gather(
+            parent.get_children(refs = ua.ObjectIds.HasChild, nodeclassmask = ua.NodeClass.Object),
+            parent.get_children(refs = ua.ObjectIds.Organizes, nodeclassmask = ua.NodeClass.Object)
+        )
+        # reduce results to set
+        child_objects = set(has_child_objects)
+        child_objects.update(organizes_objects)
+        return list(child_objects)
+
 class LADSSet(LADSNode):
 
     async def init(self, server: Server):
@@ -193,11 +207,13 @@ class Component(LADSNode):
 
     async def init(self, server: Server):
         await super().init(server)
-        self.manufacturer = await get_di_variable(self, "Manufacturer")
-        self.model = await get_di_variable(self, "Model")
-        self.serial_number = await get_di_variable(self, "SerialNumber")
-        self.device_health = await get_di_variable(self, "DeviceHealth")
-
+        (self.manufacturer, self.model, self.serial_number, self.device_health) = await asyncio.gather(
+            get_di_variable(self, "Manufacturer"),
+            get_di_variable(self, "Model"),
+            get_di_variable(self, "SerialNumber"),
+            get_di_variable(self, "DeviceHealth")
+        )
+        
     @property
     def variables(self) ->list[Node]:
         return [self.manufacturer, self.model, self.serial_number, self.device_health]
@@ -207,16 +223,12 @@ class Device(Component):
     async def init(self, server: Server):
         await super().init(server)
         functional_unit_set = await self.get_lads_child("FunctionalUnitSet")
-        nodes = await functional_unit_set.get_children(refs = ua.ObjectIds.HasChild, nodeclassmask = ua.NodeClass.Object)
-        self.functional_units: list[FunctionalUnit] = []
-        for node in nodes:
-            functional_unit: FunctionalUnit = await propagate_to_FunctionalUnit(node, server)
-            self.functional_units.append(functional_unit)
+        nodes = await self.get_child_objects(functional_unit_set)
+        self.functional_units: list[FunctionalUnit] = await asyncio.gather(*(propagate_to_FunctionalUnit(node, server) for node in nodes))
 
     async def finalize_init(self):
         await super().finalize_init()
-        for functional_unit in self.functional_units:
-            await functional_unit.finalize_init()
+        await asyncio.gather(*(functional_unit.finalize_init() for functional_unit in self.functional_units))
         self.subscription_handler = SubscriptionHandler()
         await self.subscription_handler.subscribe_data_change(self.server, self.variables)
         await self.subscription_handler.subscribe_events(self.server, self)
@@ -232,13 +244,17 @@ class Device(Component):
         else:
             return []
 
+Function = NewType("Function", LADSNode)
+
 class FunctionSet(LADSSet):
 
     async def init(self, server: Server):
         await super().init(server)
-        nodes = await self.get_children(refs = ua.ObjectIds.HasChild, nodeclassmask = ua.NodeClass.Object)
-        self.functions: list[Function] = []
-        for node in nodes:
+        nodes = await self.get_child_objects()
+        self.functions: list[Function] = await asyncio.gather(*(self.propagate_to_function(node) for node in nodes))
+    
+    async def propagate_to_function(self, node: Node) -> Function:
+            server = self.server
             types = await browse_types(node)
             if Server.AnalogControlFuntionType in types:
                 function: AnalogControlFunction = await propagate_to_AnalogControlFunction(node, server)
@@ -250,7 +266,8 @@ class FunctionSet(LADSSet):
                 function: StartStopControlFunction = await propagate_to_StartStopControlFunction(node, server)
             else:
                 function = await propagate_to_Function(node, server)
-            self.functions.append(function)
+            return function
+
 
     @property
     def all_variables(self) -> list[Node]:
@@ -258,8 +275,6 @@ class FunctionSet(LADSSet):
         for function in self.functions:
             nodes = nodes + function.all_variables
         return nodes
-
-Function = NewType("Function", LADSNode)
 
 class FunctionalUnit(LADSNode):
 
@@ -482,22 +497,6 @@ async def main():
                 print(functional_unit)
                 for function in functional_unit.functions:
                     print(function) 
-
-
-        functionalUnit = server.devices[0].functional_units[0]
-        functionSet = await functionalUnit.get_child(["5:FunctionSet"])
-        temperatureController = await functionSet.get_child(["6:TemperatureController"])
-
-        # subscribing to a variable node
-        handler = SubscriptionHandler()
-        sub = await client.create_subscription(100, handler)
-        #handle = await sub.subscribe_data_change([temperatureSP, temperaturePV, temperatureState])
-        await asyncio.sleep(0.1)
-
-        # we can also subscribe to events from server
-        await sub.subscribe_events(temperatureController)
-        # await sub.unsubscribe(handle)
-        # await sub.delete()
 
         # calling a method on server
         # res = await obj.call_method("2:multiply", 3, "klk")
