@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import pandas as pd
+import datetime as dt
 from typing import Type, NewType, Any
 from asyncua import Client, ua, Node
 from asyncua.common.subscription import DataChangeNotif
@@ -22,6 +24,7 @@ class ObjectIds(IntEnum):
 
 class Server():
     BaseObjectType: Node
+    FiniteStateMachineType: Node
     DeviceType: Node
     ComponentType: Node
     FunctionalUnitSetType: Node
@@ -33,11 +36,13 @@ class Server():
     StartStopControlFunctionType: Node
     CoverFunctionType: Node
 
-    def __init__(self, client: Client, uri: str) -> None:
+    def __init__(self, client: Client, name: str) -> None:
         self.client = client
-        self.uri = uri
+        self.name = name
         self.server = self
         self.devices: list[Device] = []
+        self.intialized = False
+        self.running = True
 
     async def init(self):
         # read namespace indices
@@ -45,10 +50,10 @@ class Server():
         self.ns_AMB = await self.client.get_namespace_index("http://opcfoundation.org/UA/AMB/")
         self.ns_Machinery = await self.client.get_namespace_index("http://opcfoundation.org/UA/Machinery/")
         self.ns_LADS = await self.client.get_namespace_index("http://opcfoundation.org/UA/LADS/")
-        self.ns = await self.client.get_namespace_index(self.uri)
 
         # get well known type nodes
         Server.BaseObjectType = self.client.get_node(ua.ObjectIds.BaseObjectType)
+        Server.FiniteStateMachineType = self.client.get_node(ua.ObjectIds.FiniteStateMachineType)
         Server.BaseVariableType = self.client.get_node(ua.ObjectIds.BaseVariableType)
         Server.AnalogItemType = self.client.get_node(ua.ObjectIds.AnalogItemType)
         Server.DeviceType = self.get_lads_node(ObjectIds.DeviceType)
@@ -69,15 +74,11 @@ class Server():
             device: Device = await propagate_to_Device(node, self)
             await device.finalize_init()
             self.devices.append(device)
+        self.intialized = True
 
     def get_lads_node(self, id: int) -> Node | None:
         return self.client.get_node( ua.NodeId(id, self.ns_LADS))
     
-async def create_lads_server(client: Client, uri: str) -> Server:
-    server = Server(client, uri)
-    await server.init()
-    return server
-
 async def get_parent_nodes(node: Node, root_node: Node = None) -> list[Node]:
     parent = await node.get_parent()
     if parent == root_node:
@@ -100,6 +101,21 @@ async def is_of_type(node: Node, type_node: Node) -> bool:
     types = await browse_types(node)
     return type_node in types
 
+unique_name_delimiter = "/"
+
+def variant_value_to_str(variant: ua.Variant) -> str:
+    if variant is None:
+        return "result"
+    value = variant.Value
+    if isinstance(value,ua.LocalizedText):
+        return value.Text if value.Text is not None else ""
+    elif isinstance(value, ua.QualifiedName):
+        return  value.Name
+    elif isinstance(value, dt.datetime):
+        return  value.strftime("%d.%m.%Y %H:%M:%S")
+    else:
+        return str(value)
+
 class SubscriptionHandler(object):
 
     def __init__(self) -> None:
@@ -107,7 +123,8 @@ class SubscriptionHandler(object):
         self.subscription = None
         self.subscribed_variables = None
         self.event_node = None
-        self.events: list[Event] = []
+        self.events: pd.DataFrame = None
+        self.last_event_update = dt.datetime.now()
 
     async def subscribe_data_change(self, server: Server, nodes: list[Node], period: float = 500):
         if self.subscription is None:
@@ -121,19 +138,34 @@ class SubscriptionHandler(object):
         self.event_node: LADSNode = node
         return await self.subscription.subscribe_events(node)        
  
-    def datachange_notification(self, node: Node, val: Any, data: DataChangeNotif):
-        variable = self.subscribed_variables[node.nodeid]
+    def datachange_notification(self, node
+                                : Node, val: Any, data: DataChangeNotif):
+        variable: Node = self.subscribed_variables[node.nodeid]
         assert(variable is not None)
         variable.data_change_notification(data)
-        print(f"{variable.display_name} = {val}")
+        # print(f"{variable.display_name} = {val}")
 
     def event_notification(self, event: Event):
-        self.events.append(event)
-        if len(self.events) > 1000:
-            self.events.pop(0)
-        print(f"{self.event_node.display_name}", event.__dict__["Message"])
+        fields_dict = event.get_event_props_as_fields_dict()
+        event_fields = {}
+        try:
+            event_fields = {k: variant_value_to_str(v) for k, v in fields_dict.items()}
+        except Exception as error:
+            print(error)
+        key = pd.to_datetime(dt.datetime.now())
+        if self.events is None:
+            self.events = pd.DataFrame(event_fields, index = [key])
+        else:
+            self.events.loc[key] = event_fields
+            if len(self.events.index) > 1000:
+                self.events = self.events.tail(-10)
+        self.last_event_update = key
+
+    def status_change_notification(self, status: Any):
+        print(status)
 
 class LADSNode(Node):
+    alternate_display_name: str = None
 
     async def init(self, server: Server):
         self.server: Server = server
@@ -159,6 +191,10 @@ class LADSNode(Node):
         else:
             return self.browse_name.Name
 
+    @property
+    def unique_name(self) -> str:
+        return self.display_name
+    
     @property
     def variables(self) ->list[Node]:
         return []
@@ -193,6 +229,14 @@ class LADSNode(Node):
         child_objects.update(organizes_objects)
         return list(child_objects)
 
+class StateMachine(LADSNode):
+    async def init(self, server: Server):
+        await super().init(server)
+        self.current_state: BaseVariable = await propagate_to_StateVariable(await self.get_child("CurrentState"), server)
+        self.current_state.alternate_display_name = self.display_name
+
+Function = NewType("Function", LADSNode)
+
 class LADSSet(LADSNode):
 
     async def init(self, server: Server):
@@ -202,49 +246,59 @@ class LADSSet(LADSNode):
     @property
     def variables(self) ->list[Node]:
         return [self.node_version]
-
+    
 class Component(LADSNode):
 
     async def init(self, server: Server):
         await super().init(server)
-        (self.manufacturer, self.model, self.serial_number, self.device_health) = await asyncio.gather(
-            get_di_variable(self, "Manufacturer"),
-            get_di_variable(self, "Model"),
-            get_di_variable(self, "SerialNumber"),
-            get_di_variable(self, "DeviceHealth")
-        )
+        self._variables = await get_properties_and_variables(self)
+        self._variables.sort(key = lambda variable: variable.display_name)
         
     @property
     def variables(self) ->list[Node]:
-        return [self.manufacturer, self.model, self.serial_number, self.device_health]
+        return self._variables
 
 class Device(Component):
+    state_machine: StateMachine
+    machinery_item_state: StateMachine
+    machinery_operation_mode: StateMachine
 
     async def init(self, server: Server):
         await super().init(server)
         functional_unit_set = await self.get_lads_child("FunctionalUnitSet")
         nodes = await self.get_child_objects(functional_unit_set)
         self.functional_units: list[FunctionalUnit] = await asyncio.gather(*(propagate_to_FunctionalUnit(node, server) for node in nodes))
+        self.state_machine, self.machinery_item_state, self.machinery_operation_mode = await asyncio.gather(
+            propagate_to_StateMachine(await self.get_lads_child("StateMachine"), server),
+            propagate_to_StateMachine(await self.get_machinery_child("MachineryItemState"), server),
+            propagate_to_StateMachine(await self.get_machinery_child("MachineryOperationMode"), server),
+        )
 
     async def finalize_init(self):
         await super().finalize_init()
-        await asyncio.gather(*(functional_unit.finalize_init() for functional_unit in self.functional_units))
+        await asyncio.gather(*(functional_unit.finalize_init(self) for functional_unit in self.functional_units))
         self.subscription_handler = SubscriptionHandler()
         await self.subscription_handler.subscribe_data_change(self.server, self.variables)
         await self.subscription_handler.subscribe_events(self.server, self)
 
     @property
-    def variables(self) ->list[Node]:
+    def unique_name(self) -> str:
+        return f"{self.server.name}{unique_name_delimiter}{self.display_name}"
+    
+    @property
+    def name_plate_variables(self) ->list[Node]:
         return super().variables
 
     @property
+    def variables(self) ->list[Node]:
+        return self.name_plate_variables + [self.state_machine.current_state, self.machinery_item_state.current_state, self.machinery_operation_mode.current_state,]
+    
+    @property
     def events(self) ->list[Event]:
         if self.subscription_handler is not None:
-            return self.subscription_handler.events
+            return self.subscription_handler.event_list
         else:
             return []
-
-Function = NewType("Function", LADSNode)
 
 class FunctionSet(LADSSet):
 
@@ -252,6 +306,7 @@ class FunctionSet(LADSSet):
         await super().init(server)
         nodes = await self.get_child_objects()
         self.functions: list[Function] = await asyncio.gather(*(self.propagate_to_function(node) for node in nodes))
+        self.functions.sort(key = lambda function: function.display_name)
     
     async def propagate_to_function(self, node: Node) -> Function:
             server = self.server
@@ -277,17 +332,22 @@ class FunctionSet(LADSSet):
         return nodes
 
 class FunctionalUnit(LADSNode):
+    state_machine: StateMachine
+    function_set: FunctionSet
 
     async def init(self, server: Server):
         await super().init(server)
-        self.function_set: FunctionSet = await self.get_lads_child("FunctionSet")
-        if self.function_set is not None:
-            self.function_set = await propagate_to_FunctionSet(self.function_set, server)
+        self.function_set, self.state_machine = await asyncio.gather(
+            propagate_to_FunctionSet(await self.get_lads_child("FunctionSet"), server),
+            propagate_to_StateMachine(await self.get_lads_child("StateMachine"), server)
+        )
 
-    async def finalize_init(self):
+    async def finalize_init(self, device: Device):
         await super().finalize_init()
+        self.device = device
         nodes = self.variables
         if self.function_set is not None:
+            await asyncio.gather(*(function.finalize_init(self) for function in self.function_set.functions))
             variables = self.function_set.all_variables
             nodes = nodes + variables
         self.subscription_handler = SubscriptionHandler()
@@ -295,13 +355,17 @@ class FunctionalUnit(LADSNode):
         await self.subscription_handler.subscribe_events(self.server, self)
 
     @property
+    def unique_name(self) -> str:
+        return f"{self.device.unique_name}{unique_name_delimiter}{self.display_name}"
+    
+    @property
     def functions(self) -> list[Function]:
         return self.function_set.functions
     
     @property
     def events(self) ->list[Event]:
         if self.subscription_handler is not None:
-            return self.subscription_handler.events
+            return self.subscription_handler.event_list
         else:
             return []
 
@@ -315,6 +379,14 @@ class Function(LADSNode):
         if self.function_set is not None:
             self.function_set = await propagate_to_FunctionSet(self.function_set, server)
 
+    async def finalize_init(self, functional_unit: FunctionalUnit):
+        await super().finalize_init()
+        self.functional_unit = functional_unit
+
+    @property
+    def unique_name(self) -> str:
+        return f"{self.functional_unit.unique_name}{unique_name_delimiter}{self.display_name}"
+    
     @property
     def functions(self) -> list[Function]:
         return self.function_set.functions
@@ -334,12 +406,19 @@ class Function(LADSNode):
         return nodes
 
 class BaseVariable(LADSNode):
+
     def __str__(self):
-        return f"BaseVariable(BrowseName={self.display_name}) = {self.value}"
+        return f"BaseVariable({self.display_name}) = {self.value}"
     
     async def init(self, server: Server):
         await super().init(server)
-        self.data_value = await self.read_data_value(raise_on_bad_status=False)
+        (self.data_value, historizing) = await asyncio.gather(
+            self.read_data_value(raise_on_bad_status=False),
+            self.read_attribute(ua.AttributeIds.Historizing)
+        )
+        self.history = None
+        if (historizing.Value.Value):
+            self.history = pd.DataFrame({f"{self.display_name}": [self.value]}, index = [pd.to_datetime(self.data_value.SourceTimestamp)])
 
     @property
     def value(self) -> Any:
@@ -347,13 +426,32 @@ class BaseVariable(LADSNode):
             return self.data_value.Value.Value
         else:
             return None
-        
+            
+    @property
+    def value_str(self) -> str:
+        if self.data_value:
+            return variant_value_to_str(self.data_value.Value)
+        else:
+            return ""
+            
     def data_change_notification(self, data: DataChangeNotif):
         self.data_value = data.monitored_item.Value
+        if self.history is not None:
+            self.history.loc[pd.to_datetime(self.data_value.SourceTimestamp)] = self.value
+            if len(self.history.index) > 600:
+                self.history = self.history.tail(-1)
+
+class StateVariable(BaseVariable):
+
+    @property
+    def value_str(self) -> str:
+        s =  super().value_str
+        l = s.split(":")
+        return s if len(l) < 2 else l[1]
 
 class AnalogItem(BaseVariable):
     def __str__(self):
-        return f"AnalogItem(BrowseName={self.display_name}) = {self.value} [{self.engineering_units.DisplayName.Text}]"
+        return f"AnalogItem({self.display_name}) = {self.value} [{self.engineering_units.DisplayName.Text}]"
     
     async def init(self, server: Server):
         await super().init(server)
@@ -372,16 +470,31 @@ class AnalogItem(BaseVariable):
         finally:
             self.eu_range: ua.Range = await self.eu_range.get_value()
 
-class BaseControlFunction(Function):
+    @property
+    def eu(self) -> str:
+        if self.engineering_units is not None:
+            return self.engineering_units.DisplayName.Text
+        else:
+            return ""
+
+class BaseStateMachineFunction(Function):
+    state_machine: StateMachine
     
     async def init(self, server: Server):
         await super().init(server)        
-        state_machine = await self.get_lads_child("StateMachine")
-        self.current_state: BaseVariable = await propagate_to_BaseVariable(await state_machine.get_child("CurrentState"), server)
+        self.state_machine = await propagate_to_StateMachine(await self.get_lads_child("StateMachine"), server)
 
     @property
     def variables(self) ->list[Node]:
-        return super().variables + [self.current_state]
+        return super().variables + [self.state_machine.current_state]
+
+    @property
+    def current_state(self) -> BaseVariable:
+        return self.state_machine.current_state
+
+class BaseControlFunction(BaseStateMachineFunction):
+     async def init(self, server: Server):
+        await super().init(server)        
 
 class StartStopControlFunction(BaseControlFunction):
     def __str__(self):
@@ -412,19 +525,10 @@ class AnalogSensorFunction(Function):
     def variables(self) ->list[Node]:
         return super().variables + [self.sensor_value]
 
-class CoverFunction(Function):    
+class CoverFunction(BaseStateMachineFunction):
     def __str__(self):
         return f"CoverFunction({self.display_name})\n  {self.current_state.value}"
        
-    async def init(self, server: Server):
-        await super().init(server)        
-        state_machine = await self.get_lads_child("StateMachine")
-        self.current_state: BaseVariable = await propagate_to_BaseVariable(await state_machine.get_child("CurrentState"), server)
-
-    @property
-    def variables(self) ->list[Node]:
-        return super().variables + [self.current_state]
-
 async def propagate_to(cls: Type, node: Node, type_node: Node, server: Server) -> LADSNode:
     if node is None: return None
     assert await is_of_type(node, type_node)
@@ -433,8 +537,14 @@ async def propagate_to(cls: Type, node: Node, type_node: Node, server: Server) -
     await propagated_node.init(server)
     return propagated_node
 
+async def propagate_to_StateMachine(node: Node, server: Server) -> StateMachine:
+    return await propagate_to(StateMachine, node, Server.FiniteStateMachineType, server)
+
 async def propagate_to_BaseVariable(node: Node, server: Server) -> BaseVariable:
     return await propagate_to(BaseVariable, node, Server.BaseVariableType, server)
+
+async def propagate_to_StateVariable(node: Node, server: Server) -> StateVariable:
+    return await propagate_to(StateVariable, node, Server.BaseVariableType, server)
 
 async def propagate_to_AnalogItem(node: Node, server: Server) -> AnalogItem:
     return await propagate_to(AnalogItem, node, Server.AnalogItemType, server)
@@ -470,41 +580,76 @@ async def get_lads_analog_item(parent: LADSNode, name: str) -> AnalogItem:
 async def get_di_variable(parent: LADSNode, name: str) -> BaseVariable:
     return await propagate_to_BaseVariable(await parent.get_di_child(name), parent.server)
 
-async def main():
-    url = "opc.tcp://localhost:26543"
-    async with Client(url=url) as client:
-        _logger.info("Root node is: %r", client.nodes.root)
-        _logger.info("Objects node is: %r", client.nodes.objects)
+async def get_properties_and_variables(node: LADSNode) -> list[BaseVariable]:
+    
+    (variables, properties) = await asyncio.gather(node.get_variables(), node.get_properties())
+    variables.extend(properties)
+    result: list[BaseVariable] = await asyncio.gather(*(propagate_to_BaseVariable(variable, node.server) for variable in variables))
+    return result
 
-        # Node objects have methods to read and write node attributes as well as browse or populate address space
-        _logger.info("Children of root are: %r", await client.nodes.root.get_children())
+async def run_connection_async(client: Client, server: Server):
+    async with client:
+        try:
+            # Node objects have methods to read and write node attributes as well as browse or populate address space
+            # get a specific node knowing its node id
+            #var = client.get_node(ua.NodeId(1002, 2))
+            #var = client.get_node("ns=3;i=2002")
+            #print(var)
+            #await var.read_data_value() # get value of node as a DataValue object
+            #await var.read_value() # get value of node as a python builtin
+            #await var.write_value(ua.Variant([23], ua.VariantType.Int64)) #set node value using explicit data type
+            #await var.write_value(3.9) # set node value using implicit data type
 
-        # get a specific node knowing its node id
-        #var = client.get_node(ua.NodeId(1002, 2))
-        #var = client.get_node("ns=3;i=2002")
-        #print(var)
-        #await var.read_data_value() # get value of node as a DataValue object
-        #await var.read_value() # get value of node as a python builtin
-        #await var.write_value(ua.Variant([23], ua.VariantType.Int64)) #set node value using explicit data type
-        #await var.write_value(3.9) # set node value using implicit data type
-
-        # Now getting a variable node using its browse path
-        uri = "http://spectaris.de/LuminescenceReader/"
-        server = await create_lads_server(client, uri)
-        for device in server.devices:
-            print (device)
-            for functional_unit in device.functional_units:
-                print(functional_unit)
-                for function in functional_unit.functions:
-                    print(function) 
+            # Now getting a variable node using its browse path
+            # server = await create_lads_server(client, "My Server")
+            await server.init()
+            for device in server.devices:
+                print (device)
+                for functional_unit in device.functional_units:
+                    print(functional_unit)
+                    for function in functional_unit.functions:
+                        print(function) 
+            while server.running:
+                await asyncio.sleep(0.1)
+        #except Exception as error:
+            #print(error)
+        finally:
+            # await client.close_session()
+            await client.disconnect()
+            print("disconnected")
 
         # calling a method on server
         # res = await obj.call_method("2:multiply", 3, "klk")
         # _logger.info("method result is: %r", res)
-        while True:
-            
-            await asyncio.sleep(1)
+
+import threading
+
+def run_connection(client: Client, server: Server):
+    asyncio.run(run_connection_async(client, server))
+
+DefaultServerUrl = "opc.tcp://localhost:26543"
+
+import time
+
+def create_connection(url = "opc.tcp://localhost:26543") -> Server:
+    client = Client(url)
+    server = Server(client, "My Server")
+    t = threading.Thread(target=run_connection, args=[client, server], daemon=True, name=f"LADS OPC UA Connection {server.name}")
+    t.start()
+    while not server.intialized:
+        time.sleep(0.1)
+    return server
+
+def main():
+    server = create_connection()
+    print(server)
+    # time.sleep(10)
+    # server.running = False
+    # time.sleep(1)
+    while True:
+        print("ping")
+        time.sleep(1)
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.CRITICAL)
-    asyncio.run(main())
+    logging.basicConfig(level=logging.ERROR)
+    main()
