@@ -5,7 +5,7 @@ import time, math
 import plotly.graph_objects as go
 from typing import Tuple
 # from lads_client_sim import Server, FunctionalUnit, Function, AnalogControlFunction, AnalogSensorFunction, AnalogItem, create_server
-from lads_client import BaseControlFunction, CoverFunction, Server, Device, FunctionalUnit, Function, AnalogControlFunction, AnalogSensorFunction, BaseVariable, AnalogItem, StartStopControlFunction, create_connection, DefaultServerUrl
+from lads_client import BaseControlFunction, Component, CoverFunction, Server, Device, FunctionalUnit, Function, AnalogControlFunction, AnalogSensorFunction, BaseVariable, AnalogItem, StartStopControlFunction, create_connection, DefaultServerUrl
 from asyncua import ua
 
 st.set_page_config(page_title="LADS OPC UA Client", layout="wide")
@@ -34,7 +34,8 @@ def format_number(x: float, decis = 1) -> str:
         return result
 
 def state_color(function: BaseControlFunction) -> str:
-    return "blue" if "Running" in str(function.current_state.value_str) else "gray"
+    s = str(function.current_state.value_str)
+    return "blue" if "Running" in s else "red" if "Abort" in s else "gray"
 
 def update_functions(container, functional_unit: FunctionalUnit,):
     with container:        
@@ -164,7 +165,7 @@ def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
                         axis=None, 
                         vmin=eu_range.Low, 
                         vmax=eu_range.High,
-                        cmap="turbo"
+                        cmap="BlGnRd"
                     )
 
                 with st.expander(f"**{function.display_name}**", expanded=(idx==0)):
@@ -221,15 +222,16 @@ def update_events(container, functional_unit: FunctionalUnit):
                 }
             )
 
-def insert_variables_table(variables: list[BaseVariable]):
+def insert_variables_table(variables: list[BaseVariable], has_description: bool = False):
     names = []
     values = [] 
     descriptions = []
     for variable in variables:
         names.append(variable.display_name if variable.alternate_display_name is None else variable.alternate_display_name)
         values.append(variable.value_str)
-        descriptions.append(variable.description.Text if variable.description.Text is not None else "")
-    data: pd.DataFrame = {"Name": names, "Value": values, "Description": descriptions, }
+        if has_description:
+            descriptions.append(variable.description.Text if variable.description.Text is not None else "")
+    data: pd.DataFrame = {"Name": names, "Value": values, "Description": descriptions, } if has_description else {"Name": names, "Value": values}
     column_config={
         "Name": st.column_config.Column(
             None, 
@@ -260,14 +262,18 @@ def update_device(container, device: Device):
                 device.machinery_item_state.current_state,
                 device.machinery_operation_mode.current_state
             ]
-            with st.expander(f"**Device Status**", expanded=True):
+            with st.expander(f"**Device {device.display_name} Status**", expanded=True):  
                 insert_variables_table(state_vars)
-            with st.expander(f"**Device Nameplate**", expanded=True):
-                insert_variables_table(device.name_plate_variables)
-            with st.expander(f"**Component A**", expanded=False):
-                pass
-            with st.expander(f"**Component B**", expanded=False):
-                pass
+            update_nameplates(device, expanded_count=1)
+
+def update_nameplates(component: Component, expanded_count):
+    with st.expander(f"**{component.__class__.__name__} {component.display_name} Nameplate**", expanded=expanded_count > 0):
+        insert_variables_table(component.name_plate_variables)
+    if component.components is not None:
+        count = expanded_count
+        for sub_component in component.components:
+            count = count - 1 
+            update_nameplates(sub_component, count)
 
 selectedFunctionalUnitKey = "selected_functional_unit"
 lastEventListUpdateKey = "last_event_list_update"
