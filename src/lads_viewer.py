@@ -1,115 +1,77 @@
 import streamlit as st
-import pandas as pd
-import time
-import random
 import datetime as dt
+import pandas as pd
+import time, math
 import plotly.graph_objects as go
 from typing import Tuple
-# import lads as lads
+# from lads_client_sim import Server, FunctionalUnit, Function, AnalogControlFunction, AnalogSensorFunction, AnalogItem, create_server
+from lads_client import BaseControlFunction, CoverFunction, Server, Device, FunctionalUnit, Function, AnalogControlFunction, AnalogSensorFunction, BaseVariable, AnalogItem, StartStopControlFunction, create_connection, DefaultServerUrl
+from asyncua import ua
 
-class Node():
-    def __init__(self, name: str) -> None:
-        self.name = name
-        
-class Device(Node):
-    def __init__(self, name: str) -> None:
-        super().__init__(name)
-        self.functional_units: list[FunctionalUnit] = []
+st.set_page_config(page_title="LADS OPC UA Client", layout="wide")
 
-class FunctionalUnit(Node):
-    def __init__(self, name: str) -> None:
-        super().__init__(name)
-        self.functions: list[Function] = []
+@st.cache_resource
+def get_server_connection(url: str) -> Server:
+    server: Server = create_connection(url)
+    print(f"Created server {url}")
+    return server
 
-class Function(Node):
-    def __init__(self, name: str) -> None:
-        super().__init__(name)
-        self.is_enabled = True
+def format_value(x: float | list[float], decis = 1) -> str:
+    result = "NaN"
+    try:
+        if isinstance(x, list):
+            result = f"[{format_number(x[0], decis)} .. {format_number(x[len(x) - 1], decis)}]"
+        else:
+            result = format_number(x, decis)
+    finally:
+        return result
 
-class AnalogItem(Node):
-    def __init__(self, name: str, value: float, eu: str, history = False) -> None:
-        super().__init__(name)
-        self._value = value
-        self.eu = eu
-        self.history = None
-        if history:
-            self.history = pd.DataFrame({f"{name}": [value]}, index = [pd.to_datetime(dt.datetime.now())])
-    @property
-    def value(self):
-        return self._value
-    
-    @value.setter
-    def value(self, x):
-        self._value = x
-        if self.history is not None:
-            self.history.loc[pd.to_datetime(dt.datetime.now())] = x
-            if len(self.history.index) > 600:
-                self.history = self.history.tail(-1)
+def format_number(x: float, decis = 1) -> str:
+    result = "NaN"
+    try:
+        result = "{0:.1f}".format(x)
+    finally:
+        return result
 
+def state_color(function: BaseControlFunction) -> str:
+    return "blue" if "Running" in str(function.current_state.value_str) else "gray"
 
-class AnalogControlFunction(Function):
-    def __init__(self, name: str, target_value: float, current_value: float, eu: str) -> None:
-        super().__init__(name)
-        self.target_value = AnalogItem("Target Value", target_value, eu)
-        self.current_value = AnalogItem("Currrent Value", current_value, eu, history=True)
-
-class AnalogSensorFunction(Function):
-    def __init__(self, name: str, sensor_value: float, eu: str) -> None:
-        super().__init__(name)
-        self.sensor_value = AnalogItem("Sensor Value", sensor_value, eu, history=True)
-
-my_device = Device("My Device")
-my_unit = FunctionalUnit("My Unit")    
-my_device.functional_units.append(my_unit)
-my_unit.functions.append(AnalogControlFunction("Temperature Controller", 37, 25, "°C"))
-my_unit.functions.append(AnalogControlFunction("Speed Controller", 1000, 0, "rpm"))
-my_unit.functions.append(AnalogControlFunction("Flow Controller", 10, 0, "sL/h"))
-my_unit.functions.append(AnalogSensorFunction("XCO2 Sensor", 4.0, "%"))
-
-
-# session state
-selectedDeviceKey = "selected_device"
-selectedFunctionKey = "selected_function"
-devices = [my_unit.name]
-functions = list(map(lambda function: function.name, my_unit.functions))
-
-if selectedFunctionKey not in st.session_state:
-    st.session_state[selectedFunctionKey] = functions[0]    
-if selectedDeviceKey not in st.session_state:
-    st.session_state[selectedDeviceKey] = devices[0]    
-
-
-def format_float(x: float, decis = 1) -> str:
-    return "{0:.1f}".format(x)
-
-def update_functions(container):
+def update_functions(container, functional_unit: FunctionalUnit,):
     with container:        
         with st.container():
-            for function in my_unit.functions:
+            idx = 0
+            for function in functional_unit.functions:
                 if function.is_enabled:
-                    function_widget = st.container()
-                    with function_widget:
-                        # st.divider()
-                        st.write(f"**{function.name}**")
-                        sp_col, pv_col = st.columns(2)
+                    idx += 1
+                    with st.expander(label=f"**{function.display_name}**", expanded=idx < 10):
+                        sp_col, pv_col = st.columns([4, 5])
                         if isinstance(function, AnalogControlFunction):
-                            acf: AnalogControlFunction = function
                             with sp_col:
                                 # target_value = st.number_input("**37.0** °C", on_change=new_target_value, value= 37.0, key=f"{st.session_state[selectedDeviceKey]}.{function}")
-                                st.write(f"**{format_float(acf.target_value.value)}** {acf.target_value.eu}")
+                                st.write(f"**{format_value(function.target_value.value)}** {function.target_value.eu}")
                             with pv_col: 
-                                st.subheader(f":blue[**{format_float(acf.current_value.value)}** {acf.current_value.eu}]")
+                                st.write(f":{state_color(function)}[**{format_value(function.current_value.value)}** {function.current_value.eu}]")
                         elif isinstance(function, AnalogSensorFunction):
-                            asf: AnalogSensorFunction = function
                             with pv_col: 
-                                st.subheader(f":blue[**{format_float(asf.sensor_value.value)}** {asf.sensor_value.eu}]")
-                        
-
+                                st.write(f":blue[**{format_value(function.sensor_value.value)}** {function.sensor_value.eu}]")
+                        elif isinstance(function, CoverFunction):
+                            with pv_col: 
+                                st.write(f":blue[**{function.current_state.value_str}**]")
+                        elif isinstance(function, StartStopControlFunction):
+                            with pv_col: 
+                                st.write(f":{state_color(function)}[**{function.current_state.value_str}**]")
+                       
 def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
+
+        
     with container:        
         with st.container():
-            # collect analog items
+            # collect analog items with history
             traces: list[Tuple[Function, AnalogItem]] = []
+            arrays: list[Tuple[Function, AnalogItem]] = []
+            idx = 0
+
+
             for function in functional_unit.functions:
                 analog_item: AnalogItem = None
                 if isinstance(function, AnalogControlFunction):
@@ -117,7 +79,9 @@ def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
                 elif isinstance(function, AnalogSensorFunction):
                     analog_item = function.sensor_value
                 if analog_item is not None:
-                    if analog_item.history is not None:
+                    if isinstance(analog_item.value, list):
+                        arrays.append((function, analog_item))
+                    elif analog_item.history is not None:
                         traces.append((function, analog_item))
 
             if use_plotly:
@@ -136,7 +100,7 @@ def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
                     fig.add_trace(go.Scatter(
                         x = df.index.array,
                         y = df.iloc[:, 0].array,
-                        name = function.name,
+                        name = function.display_name,
                         yaxis = f"y{index}"
                     ))
                     color="#404040"
@@ -146,7 +110,7 @@ def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
                     position = pos_left - 0.2 * (index - 1) if left else pos_right + 0.2 * ((index - 1) - count / 2)
                     position = 0 if position < 0 else 1 if position > 1 else position
                     yaxis_dict = dict(
-                        title = f"{function.name} [{analog_item.eu}]",
+                        title = f"{function.display_name} [{analog_item.eu}]",
                         titlefont = dict(color=color),
                         tickfont = dict(color=color),
                     )
@@ -162,28 +126,178 @@ def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
                 fig.update_layout(layout_dict)
 
                 fig.update_layout(
-                    title_text = functional_unit.name,
+                    # title_text = functional_unit.display_name,
                     width = 1000,
-                    title_x = 0.1,
+                    # title_x = 0.1,
                     legend = dict(yanchor = "top", xanchor = "left", x = 0.7, y = 1.35),
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                with st.expander("**Chart**", expanded=(idx==0)):
+                    st.plotly_chart(fig, use_container_width=True)
+                    idx += 1
             else:
                 for trace in traces:
                     function, analog_item = trace
-                    st.line_chart(data = analog_item.history, height = 100)
+                    with st.expander(f"**Chart {function.display_name}**", expanded=(idx==0)):
+                        st.line_chart(data = analog_item.history, height = 100)
+                        idx += 1
 
+            # tables
+            for array in arrays:
+                function, analog_item = array
+                value = analog_item.value
+                i = len(value)
+                col_count = int(math.sqrt(3 / 2 * i))
+                row_count = int(2 / 3 * col_count)
+                cols: dict = {}
+                cols["Plate"] = list(range(1, row_count + 1))
+                # cols[f"**{function.display_name}**"] = list(range(1, row_count + 1))
+                for col_idx in range(col_count):
+                    values = []
+                    for row_idx in range(row_count):
+                        values.append(format_number(value[col_idx * row_count + row_idx]))
+                    cols[chr(ord("A") + col_idx)] = values
+
+                df = pd.DataFrame(cols)
+                if analog_item.eu_range is not None:
+                    eu_range: ua.Range = analog_item.eu_range
+                    df.style.background_gradient(
+                        axis=None, 
+                        vmin=eu_range.Low, 
+                        vmax=eu_range.High,
+                        cmap="turbo"
+                    )
+
+                with st.expander(f"**{function.display_name}**", expanded=(idx==0)):
+                    #st.write(f"**{function.display_name}**")
+                    st.dataframe(
+                        df,
+                        use_container_width=True, 
+                        hide_index=True,
+                    )
+                    idx += 1
+
+def update_events(container, functional_unit: FunctionalUnit):
+    events = functional_unit.subscription_handler.events
+    if events is None:
+        return
+    last_event_update = functional_unit.subscription_handler.last_event_update
+    last_event_list_update = st.session_state[lastEventListUpdateKey]
+    if last_event_update == last_event_list_update:
+        return
+    st.session_state[lastEventListUpdateKey] = last_event_update
+    print("updating event list")
+    with container:
+        with st.container():
+            event_columns = events[["Time", "Severity", "SourceName", "Message"]]
+            st.dataframe(
+                event_columns, 
+                use_container_width=True, 
+                hide_index=True,
+                column_config={
+                    "Time": st.column_config.Column(
+                        None, 
+                        help="Timestamp of the event",
+                        disabled=True,
+                        width="medium"
+                    ),
+                    "Severity": st.column_config.Column(
+                        None, 
+                        help="Severity of the event",
+                        disabled=True,
+                        width="small"
+                    ),
+                    "SourceName": st.column_config.Column(
+                        None, 
+                        help="Source node of the event",
+                        disabled=True,
+                        width="medium"
+                    ),
+                    "Message": st.column_config.Column(
+                        None, 
+                        help="Event message",
+                        disabled=True,
+                        width="large"
+                    ),
+                }
+            )
+
+def insert_variables_table(variables: list[BaseVariable]):
+    names = []
+    values = [] 
+    descriptions = []
+    for variable in variables:
+        names.append(variable.display_name if variable.alternate_display_name is None else variable.alternate_display_name)
+        values.append(variable.value_str)
+        descriptions.append(variable.description.Text if variable.description.Text is not None else "")
+    data: pd.DataFrame = {"Name": names, "Value": values, "Description": descriptions, }
+    column_config={
+        "Name": st.column_config.Column(
+            None, 
+            help="Variable name",
+            disabled=True,
+            width="medium"
+        ),
+        "Value": st.column_config.Column(
+            None, 
+            help="Variable value",
+            disabled=True,
+            width="medium"
+        ),
+        "Description": st.column_config.Column(
+            None, 
+            help="Variable description",
+            disabled=True,
+            width="large"
+        ),
+    }
+    st.dataframe(data, use_container_width=True, hide_index=True, column_config=column_config)
+
+def update_device(container, device: Device):
+    with container:
+        with st.container():
+            state_vars = [
+                device.state_machine.current_state, 
+                device.machinery_item_state.current_state,
+                device.machinery_operation_mode.current_state
+            ]
+            with st.expander(f"**Device Status**", expanded=True):
+                insert_variables_table(state_vars)
+            with st.expander(f"**Device Nameplate**", expanded=True):
+                insert_variables_table(device.name_plate_variables)
+            with st.expander(f"**Component A**", expanded=False):
+                pass
+            with st.expander(f"**Component B**", expanded=False):
+                pass
+
+selectedFunctionalUnitKey = "selected_functional_unit"
+lastEventListUpdateKey = "last_event_list_update"
 
 def main():
-    st.set_page_config(page_title="LADS OPC UA Client", layout="wide")
+    my_server = get_server_connection(DefaultServerUrl)
+    functional_units = my_server.devices[0].functional_units
+
+    # session state
+    functional_unit_names = list(map(lambda functional_unit: functional_unit.unique_name, functional_units))
+    if selectedFunctionalUnitKey not in st.session_state:
+        st.session_state[selectedFunctionalUnitKey] = functional_unit_names[0]    
+    # in anyway create a new last_event_update on rerun
+    st.session_state[lastEventListUpdateKey] = dt.datetime.now()    
+
     container_functions = None
     
-    # Title and description
-    st.header("LADS OPC UA Client")
-    st.write(f"**{st.session_state[selectedDeviceKey]}**")
-
     # Devices list on the left side
-    st.session_state[selectedDeviceKey] = st.sidebar.selectbox("Select a device", devices)
+    st.session_state[selectedFunctionalUnitKey] = st.sidebar.selectbox("Select a functional-unit", functional_unit_names)
+
+    # Title and description
+    selected_functional_unit = functional_units[0]
+    selected_functional_unit_name = st.session_state[selectedFunctionalUnitKey]
+    for functional_unit in functional_units:
+        if functional_unit.unique_name == selected_functional_unit_name:
+            selected_functional_unit = functional_unit
+
+    st.header("LADS OPC UA Client")
+    st.write(f"**{selected_functional_unit.unique_name}**")
+
     tab_functions, tab_program_manager, tab_device = st.tabs(["Operation", "Program Management", "Asset Management"])
     container_functional_unit = st.empty()
     with container_functional_unit:
@@ -193,7 +307,7 @@ def main():
             # Functions list in the detail view
             with col1:
                 container_functions = st.empty()
-                update_functions(container_functions)
+                update_functions(container_functions, selected_functional_unit)
 
             # Chart in the detail view
             with col2:
@@ -209,40 +323,27 @@ def main():
                 st.write("**Results**")
 
         with tab_device:
-            st.write("**Nameplate**")
-            name_plate = pd.DataFrame({
-                "Parameter": ["Manufacturer", "Model", "Serialnumber", "Location"],
-                "Value": ["AixEngineers", "AixBox Controller", "08154711", "Turmstrasse, Aachen"],
-                "Description": ["Device manufacturer", "Device model", "Device serialnumber", "Location"],
-            })
-            st.table(name_plate)
+            container_device = st.empty()
+            update_device(container_device, selected_functional_unit.device)
 
         # Display the events table
         with st.container():
-            events = pd.DataFrame({
-                'Timestamp': ['2022-01-01 10:00:00', '2022-01-02 14:30:00', '2022-01-03 09:45:00'],
-                'Severity': [0, 0, 0],
-                'Source': ['Temperature Controller', 'Temperature Controller', 'Pressure Controller'],
-                'Message': ['Event 1', 'Event 2', 'Event 3'],
-            })
             st.divider()
             st.write("**Events**")
-            st.table(events)
+            container_events = st.empty()
+            update_events(container_events, selected_functional_unit)
             
         # update loop
         cf = 0.1
         index = 5
         while(True):
+            update_functions(container_functions, selected_functional_unit)
+            update_events(container_events, selected_functional_unit)
+            update_device(container_device, selected_functional_unit.device)
             index += 1
-            functional_unit = my_unit
-            for function in functional_unit.functions:
-                if isinstance(function, AnalogControlFunction):
-                    acf: AnalogControlFunction = function
-                    acf.current_value.value = cf * acf.target_value.value + (1 - cf) * acf.current_value.value + 0.1 * (random.random() - 0.5)
-            update_functions(container_functions)
             if index >= 5:
                 index = 0
-                update_charts(container_chart, functional_unit, True)
+                update_charts(container_chart, selected_functional_unit, True)
             time.sleep(1)
 
 if __name__ == '__main__':
