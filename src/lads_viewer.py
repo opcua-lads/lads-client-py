@@ -237,19 +237,19 @@ def insert_variables_table(variables: list[BaseVariable], has_description: bool 
             None, 
             help="Variable name",
             disabled=True,
-            width="medium"
+            # width="medium"
         ),
         "Value": st.column_config.Column(
             None, 
             help="Variable value",
             disabled=True,
-            width="medium"
+            # width="medium"
         ),
         "Description": st.column_config.Column(
             None, 
             help="Variable description",
             disabled=True,
-            width="large"
+            # width="large"
         ),
     }
     st.dataframe(data, use_container_width=True, hide_index=True, column_config=column_config)
@@ -257,18 +257,21 @@ def insert_variables_table(variables: list[BaseVariable], has_description: bool 
 def update_device(container, device: Device):
     with container:
         with st.container():
-            state_vars = [
-                device.state_machine.current_state, 
-                device.machinery_item_state.current_state,
-                device.machinery_operation_mode.current_state
-            ]
-            with st.expander(f"**Device {device.display_name} Status Information**", expanded=True):  
-                insert_variables_table(state_vars)
-            update_nameplates(device, expanded_count=1)
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                state_vars = [
+                    device.state_machine.current_state, 
+                    device.machinery_item_state.current_state,
+                    device.machinery_operation_mode.current_state
+                ]
+                with st.expander(f"**Overview {device.display_name}**", expanded=True):  
+                    insert_variables_table(state_vars)
 
-def update_nameplates(component: Component, expanded_count):
-    with st.expander(f"**{component.__class__.__name__} {component.display_name} Asset Information**", expanded=expanded_count > 0):
-        col1, col2 = st.columns(2)
+            update_components(device, expanded_count=1)
+
+def update_components(component: Component, expanded_count):
+    with st.expander(f"**{component.__class__.__name__} {component.display_name}**", expanded=expanded_count > 0):
+        col1, col2, col3 = st.columns(3)
         with col1:
             st.write("Nameplate")
             insert_variables_table(component.name_plate_variables)
@@ -276,12 +279,16 @@ def update_nameplates(component: Component, expanded_count):
             if component.operation_counters is not None:
                 st.write("Operation Counters")
                 insert_variables_table(component.operation_counters.variables)
+        with col3:
+            if len(component.lifetime_counters) > 0:
+                st.write("Lifetime Counters")
+                insert_variables_table(component.lifetime_counters)
 
     if component.components is not None:
         count = expanded_count
         for sub_component in component.components:
             count = count - 1 
-            update_nameplates(sub_component, count)
+            update_components(sub_component, count)
 
 selectedFunctionalUnitKey = "selected_functional_unit"
 lastEventListUpdateKey = "last_event_list_update"

@@ -13,11 +13,13 @@ _logger = logging.getLogger(__name__)
 LADSNode = NewType("BaseVariable", Node)
 BaseVariable = NewType("BaseVariable", LADSNode)
 NodeVersionVariable = NewType("NodeVersionVariable", BaseVariable)
+AnalogItem = NewType("AnalogItem", BaseVariable)
+LifetimeCounter = NewType("LifetimeCounter", AnalogItem)
 Component = NewType("Component", LADSNode)
 FunctionalUnit = NewType("FunctionalUnit", LADSNode)
 Function = NewType("Function", LADSNode)
       
-class ObjectIds(IntEnum):
+class LADSObjectIds(IntEnum):
     DeviceType = 1002
     ComponentSetType = 1025
     ComponentType = 1024
@@ -30,9 +32,19 @@ class ObjectIds(IntEnum):
     StartStopControlFunctionType = 1032
     CoverFunctionType = 1011
 
+class MachineryObjectIds(IntEnum):
+    MachineryOperationCounterType = 1009
+    MachineryLifeTimeCounterType = 1015
+
+class DIObjectIds(IntEnum):
+    LifetimeVariableType = 468
+
 class Server():
     BaseObjectType: Node
     FiniteStateMachineType: Node
+    LifetimeVariableType: Node
+    MachineryOperationCounterType: Node
+    MachineryLifeTimeCounterType: Node
     DeviceType: Node
     ComponentSetType: Node
     ComponentType: Node
@@ -65,17 +77,20 @@ class Server():
         Server.FiniteStateMachineType = self.client.get_node(ua.ObjectIds.FiniteStateMachineType)
         Server.BaseVariableType = self.client.get_node(ua.ObjectIds.BaseVariableType)
         Server.AnalogItemType = self.client.get_node(ua.ObjectIds.AnalogItemType)
-        Server.DeviceType = self.get_lads_node(ObjectIds.DeviceType)
-        Server.ComponentSetType = self.get_lads_node(ObjectIds.ComponentSetType)
-        Server.ComponentType = self.get_lads_node(ObjectIds.ComponentType)
-        Server.FunctionalUnitSetType = self.get_lads_node(ObjectIds.FunctionalUnitSetType)
-        Server.FunctionalUnitType = self.get_lads_node(ObjectIds.FunctionalUnitType)
-        Server.FunctionSetType = self.get_lads_node(ObjectIds.FunctionSetType)
-        Server.FunctionType = self.get_lads_node(ObjectIds.FunctionType)
-        Server.AnalogSensorFunctionType = self.get_lads_node(ObjectIds.AnalogSensorFunctionType)
-        Server.AnalogControlFuntionType = self.get_lads_node(ObjectIds.AnalogControlFuntionType)
-        Server.StartStopControlFunctionType = self.get_lads_node(ObjectIds.StartStopControlFunctionType)
-        Server.CoverFunctionType = self.get_lads_node(ObjectIds.CoverFunctionType)
+        Server.LifetimeVariableType = self.get_di_node(DIObjectIds.LifetimeVariableType)
+        Server.MachineryOperationCounterType = self.get_machinery_node(MachineryObjectIds.MachineryOperationCounterType)
+        Server.MachineryLifeTimeCounterType = self.get_machinery_node(MachineryObjectIds.MachineryLifeTimeCounterType)
+        Server.DeviceType = self.get_lads_node(LADSObjectIds.DeviceType)
+        Server.ComponentSetType = self.get_lads_node(LADSObjectIds.ComponentSetType)
+        Server.ComponentType = self.get_lads_node(LADSObjectIds.ComponentType)
+        Server.FunctionalUnitSetType = self.get_lads_node(LADSObjectIds.FunctionalUnitSetType)
+        Server.FunctionalUnitType = self.get_lads_node(LADSObjectIds.FunctionalUnitType)
+        Server.FunctionSetType = self.get_lads_node(LADSObjectIds.FunctionSetType)
+        Server.FunctionType = self.get_lads_node(LADSObjectIds.FunctionType)
+        Server.AnalogSensorFunctionType = self.get_lads_node(LADSObjectIds.AnalogSensorFunctionType)
+        Server.AnalogControlFuntionType = self.get_lads_node(LADSObjectIds.AnalogControlFuntionType)
+        Server.StartStopControlFunctionType = self.get_lads_node(LADSObjectIds.StartStopControlFunctionType)
+        Server.CoverFunctionType = self.get_lads_node(LADSObjectIds.CoverFunctionType)
 
         # browse for devices in DeviceSet
         device_set = await self.client.nodes.objects.get_child(f"{self.ns_DI}:DeviceSet")
@@ -86,8 +101,14 @@ class Server():
             self.devices.append(device)
         self.initialized = True
 
+    def get_di_node(self, id: int) -> Node | None:
+        return self.client.get_node(ua.NodeId(id, self.ns_DI))
+
+    def get_machinery_node(self, id: int) -> Node | None:
+        return self.client.get_node(ua.NodeId(id, self.ns_Machinery))
+
     def get_lads_node(self, id: int) -> Node | None:
-        return self.client.get_node( ua.NodeId(id, self.ns_LADS))
+        return self.client.get_node(ua.NodeId(id, self.ns_LADS))
     
     @property
     def functional_units(self) -> list[FunctionalUnit]:
@@ -185,6 +206,7 @@ class SubscriptionHandler(object):
 
     def status_change_notification(self, status: Any):
         print(status)
+
 class LADSNode(Node):
 
     @classmethod
@@ -312,17 +334,34 @@ class OperationCounters(LADSNode):
 
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(OperationCounters, node, server.BaseObjectType, server)
+        return await propagate_to(OperationCounters, node, server.MachineryOperationCounterType, server)
     
     async def init(self, server: Server):
         await super().init(server)
-        self.operation_cycle_counter = await self.get_di_variable("OperationCycleCounter")
-        self.operation_duration = await self.get_di_variable("OperationDuration")
-        self.power_on_duration = await self.get_di_variable("PowerOnDuration")
-
+        self.operation_cycle_counter, self.operation_duration, self.power_on_duration = await asyncio.gather(
+            self.get_di_variable("OperationCycleCounter"),
+            self.get_di_variable("OperationDuration"),
+            self.get_di_variable("PowerOnDuration"),
+        )
+            
     @property
     def variables(self) -> list[BaseVariable]:
         return remove_none([self.operation_cycle_counter, self.operation_duration, self.power_on_duration])
+
+class LifetimeCounters(LADSNode):
+    @classmethod
+    async def propagate(cls, node: Node, server: Server) -> Self:
+        return await propagate_to(LifetimeCounters, node, server.MachineryLifeTimeCounterType, server)
+        
+    async def init(self, server: Server):
+        await super().init(server)
+        nodes = await get_properties_and_variables(self)
+        self.lifetime_counters: list[LifetimeCounter] = await asyncio.gather(*(LifetimeCounter.propagate(node, server) for node in nodes))
+        self.lifetime_counters.sort(key = lambda node: node.display_name)
+
+    @property
+    def variables(self) -> list[Node]:
+        return super().variables + self.lifetime_counters
 
 class ComponentSet(LADSSet):
     @classmethod
@@ -335,6 +374,10 @@ class ComponentSet(LADSSet):
         self.components.sort(key = lambda node: node.display_name)
 
 class Component(LADSNode):
+    component_set: ComponentSet
+    operation_counters: OperationCounters
+    lifetime_counter_set: LifetimeCounters
+
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
         return await propagate_to(Component, node, server.ComponentType, server)
@@ -345,11 +388,16 @@ class Component(LADSNode):
         self._variables.sort(key = lambda variable: variable.display_name)
         self.component_set = await ComponentSet.propagate(await self.get_machinery_child("Components"), server)
         self.operation_counters = await OperationCounters.propagate(await self.get_di_child("OperationCounters"), server)
+        self.lifetime_counter_set = await LifetimeCounters.propagate(await self.get_machinery_child("LifetimeCounters"), server)
 
     @property
     def components(self) -> list[Component]:
         return [] if self.component_set is None else self.component_set.components
         
+    @property
+    def lifetime_counters(self) -> list[LifetimeCounter]:
+        return [] if self.lifetime_counter_set is None else self.lifetime_counter_set.lifetime_counters
+    
     @property
     def variables(self) ->list[BaseVariable]:
         return self._variables
@@ -593,16 +641,14 @@ class AnalogItem(BaseVariable):
         self.eu_range: ua.Range = None
         try:
             self.engineering_units = await self.get_child("EngineeringUnits")
+            self.engineering_units: ua.EUInformation = await self.engineering_units.get_value()
         except:
             pass
-        finally:
-            self.engineering_units: ua.EUInformation = await self.engineering_units.get_value()
         try:
             self.eu_range = await self.get_child("EURange")
+            self.eu_range: ua.Range = await self.eu_range.get_value()
         except:
             pass
-        finally:
-            self.eu_range: ua.Range = await self.eu_range.get_value()
 
     @property
     def eu(self) -> str:
@@ -610,6 +656,26 @@ class AnalogItem(BaseVariable):
             return self.engineering_units.DisplayName.Text
         else:
             return ""
+
+class LifetimeCounter(AnalogItem):
+    limit_value: BaseVariable
+    start_value: BaseVariable
+    warning_values: BaseVariable
+
+    @classmethod
+    async def propagate(cls, node: Node, server: Server) -> Self:
+        return await propagate_to(LifetimeCounter, node, server.LifetimeVariableType, server)
+
+    def __str__(self):
+        return f"{super().__str__()}\n  {self.limit_value}\n  {self.start_value}"
+
+    async def init(self, server: Server):
+        await super().init(server)
+        self.limit_value, self.start_value, self.warning_values = await asyncio.gather(
+            self.get_di_variable("LimitValue"),
+            self.get_di_variable("StartValue"),
+            self.get_di_variable("WarningValues"),
+        )
 
 class BaseStateMachineFunction(Function):
     state_machine: StateMachine
