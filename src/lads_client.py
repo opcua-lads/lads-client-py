@@ -10,6 +10,13 @@ from enum import IntEnum
 
 _logger = logging.getLogger(__name__)
 
+LADSNode = NewType("BaseVariable", Node)
+BaseVariable = NewType("BaseVariable", LADSNode)
+NodeVersionVariable = NewType("NodeVersionVariable", BaseVariable)
+Component = NewType("Component", LADSNode)
+FunctionalUnit = NewType("FunctionalUnit", LADSNode)
+Function = NewType("Function", LADSNode)
+      
 class ObjectIds(IntEnum):
     DeviceType = 1002
     ComponentSetType = 1025
@@ -43,7 +50,7 @@ class Server():
         self.name = name
         self.server = self
         self.devices: list[Device] = []
-        self.intialized = False
+        self.initialized = False
         self.running = True
 
     async def init(self):
@@ -77,10 +84,19 @@ class Server():
             device: Device = await Device.propagate(node, self)
             await device.finalize_init()
             self.devices.append(device)
-        self.intialized = True
+        self.initialized = True
 
     def get_lads_node(self, id: int) -> Node | None:
         return self.client.get_node( ua.NodeId(id, self.ns_LADS))
+    
+    @property
+    def functional_units(self) -> list[FunctionalUnit]:
+        if not self.initialized: return []
+        functional_units: list[FunctionalUnit] = []
+        for device in self.devices:
+            functional_units = functional_units + device.functional_units
+        return functional_units
+
     
 async def get_parent_nodes(node: Node, root_node: Node = None) -> list[Node]:
     parent = await node.get_parent()
@@ -118,6 +134,9 @@ def variant_value_to_str(variant: ua.Variant) -> str:
         return  value.strftime("%d.%m.%Y %H:%M:%S")
     else:
         return str(value)
+
+def remove_none(nodes: list[Node]) -> list[Node]:
+    return list(filter(lambda node: node is not None, nodes))
 
 class SubscriptionHandler(object):
 
@@ -166,15 +185,6 @@ class SubscriptionHandler(object):
 
     def status_change_notification(self, status: Any):
         print(status)
-
-
-LADSNode = NewType("BaseVariable", Node)
-BaseVariable = NewType("BaseVariable", LADSNode)
-NodeVersionVariable = NewType("NodeVersionVariable", BaseVariable)
-Component = NewType("Component", LADSNode)
-FunctionalUnit = NewType("FunctionalUnit", LADSNode)
-Function = NewType("Function", LADSNode)
-      
 class LADSNode(Node):
 
     @classmethod
@@ -227,8 +237,14 @@ class LADSNode(Node):
     async def get_di_child(self, name : str) -> Node:
             return await self.get_child_or_none(ua.QualifiedName(name, self.server.ns_DI))
     
+    async def get_di_variable(self, name : str) -> BaseVariable:
+            return await BaseVariable.propagate(await self.get_di_child(name), self.server)
+    
     async def get_machinery_child(self, name : str) -> Node:
             return await self.get_child_or_none(ua.QualifiedName(name, self.server.ns_Machinery))
+    
+    async def get_machinery_variable(self, name : str) -> BaseVariable:
+            return await BaseVariable.propagate(await self.get_machinery_child(name), self.server)
     
     async def get_lads_child(self, name : str) -> Node:
             return await self.get_child_or_none(ua.QualifiedName(name, self.server.ns_LADS))
@@ -274,14 +290,39 @@ class LADSSet(LADSNode):
     def variables(self) ->list[Node]:
         return [] if self.node_version is None else [self.node_version]
     
-    async def node_version_changed(self):
-        current_nodes = await self.children
+    def node_version_changed(self):
+        self.update_children = True
+        # to do - spawn background job to update children..
+    
+    async def update_children(self):
+        # todo
+        current_nodes = await self.get_child_objects(self)
         current_node_ids = set(map(lambda node: node.nodeid, current_nodes))
-        previous_nodes = self.components
+        previous_nodes = self.children
         previous_node_ids = set(map(lambda node: node.nodeid, previous_nodes))
         new_node_ids = current_node_ids.difference(previous_node_ids)
         deleted_node_ids = previous_node_ids.difference(current_node_ids)
         new_nodes = filter(lambda node_id: current_nodes , new_node_ids)
+        self.update_children = False
+
+class OperationCounters(LADSNode):
+    operation_cycle_counter: BaseVariable
+    operation_duration: BaseVariable
+    power_on_duration: BaseVariable
+
+    @classmethod
+    async def propagate(cls, node: Node, server: Server) -> Self:
+        return await propagate_to(OperationCounters, node, server.BaseObjectType, server)
+    
+    async def init(self, server: Server):
+        await super().init(server)
+        self.operation_cycle_counter = await self.get_di_variable("OperationCycleCounter")
+        self.operation_duration = await self.get_di_variable("OperationDuration")
+        self.power_on_duration = await self.get_di_variable("PowerOnDuration")
+
+    @property
+    def variables(self) -> list[BaseVariable]:
+        return remove_none([self.operation_cycle_counter, self.operation_duration, self.power_on_duration])
 
 class ComponentSet(LADSSet):
     @classmethod
@@ -290,7 +331,7 @@ class ComponentSet(LADSSet):
 
     async def init(self, server: Server):
         await super().init(server)
-        self.components: list[Component] = await asyncio.gather(*(Component.propagate(node, server) for node in self.children))
+        self.components: list[Component] = await asyncio.gather(*(Component.propagate(child, server) for child in self.children))
         self.components.sort(key = lambda node: node.display_name)
 
 class Component(LADSNode):
@@ -303,6 +344,7 @@ class Component(LADSNode):
         self._variables = await get_properties_and_variables(self)
         self._variables.sort(key = lambda variable: variable.display_name)
         self.component_set = await ComponentSet.propagate(await self.get_machinery_child("Components"), server)
+        self.operation_counters = await OperationCounters.propagate(await self.get_di_child("OperationCounters"), server)
 
     @property
     def components(self) -> list[Component]:
@@ -335,6 +377,8 @@ class Device(Component):
             StateMachine.propagate(await self.get_machinery_child("MachineryItemState"), server),
             StateMachine.propagate(await self.get_machinery_child("MachineryOperationMode"), server),
         )
+        state_machines: list[StateMachine] = remove_none([self.state_machine, self.machinery_item_state, self.machinery_operation_mode])
+        self.state_machine_vars = list(map(lambda state_machine: state_machine.current_state, state_machines))
 
     async def finalize_init(self):
         await super().finalize_init()
@@ -350,7 +394,7 @@ class Device(Component):
 
     @property
     def variables(self) ->list[BaseVariable]:
-        return self.name_plate_variables + [self.state_machine.current_state, self.machinery_item_state.current_state, self.machinery_operation_mode.current_state,]
+        return self.name_plate_variables + self.state_machine_vars
     
     @property
     def events(self) ->list[Event]:
@@ -366,7 +410,7 @@ class FunctionSet(LADSSet):
     
     async def init(self, server: Server):
         await super().init(server)
-        self.functions: list[Function] = await asyncio.gather(*(self.propagate_to_function(node) for node in self.children))
+        self.functions: list[Function] = await asyncio.gather(*(self.propagate_to_function(child) for child in self.children))
         self.functions.sort(key = lambda function: function.display_name)
     
     async def propagate_to_function(self, node: Node) -> Function:
@@ -705,7 +749,7 @@ def create_connection(url = "opc.tcp://localhost:26543") -> Server:
     server = Server(client, "My Server")
     t = threading.Thread(target=run_connection, args=[client, server], daemon=True, name=f"LADS OPC UA Connection {server.name}")
     t.start()
-    while not server.intialized:
+    while not server.initialized:
         time.sleep(0.1)
     return server
 

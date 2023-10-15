@@ -262,13 +262,21 @@ def update_device(container, device: Device):
                 device.machinery_item_state.current_state,
                 device.machinery_operation_mode.current_state
             ]
-            with st.expander(f"**Device {device.display_name} Status**", expanded=True):  
+            with st.expander(f"**Device {device.display_name} Status Information**", expanded=True):  
                 insert_variables_table(state_vars)
             update_nameplates(device, expanded_count=1)
 
 def update_nameplates(component: Component, expanded_count):
-    with st.expander(f"**{component.__class__.__name__} {component.display_name} Nameplate**", expanded=expanded_count > 0):
-        insert_variables_table(component.name_plate_variables)
+    with st.expander(f"**{component.__class__.__name__} {component.display_name} Asset Information**", expanded=expanded_count > 0):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("Nameplate")
+            insert_variables_table(component.name_plate_variables)
+        with col2:
+            if component.operation_counters is not None:
+                st.write("Operation Counters")
+                insert_variables_table(component.operation_counters.variables)
+
     if component.components is not None:
         count = expanded_count
         for sub_component in component.components:
@@ -280,7 +288,7 @@ lastEventListUpdateKey = "last_event_list_update"
 
 def main():
     my_server = get_server_connection(DefaultServerUrl)
-    functional_units = my_server.devices[0].functional_units
+    functional_units = my_server.functional_units
 
     # session state
     functional_unit_names = list(map(lambda functional_unit: functional_unit.unique_name, functional_units))
