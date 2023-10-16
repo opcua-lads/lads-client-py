@@ -4,8 +4,7 @@ import pandas as pd
 import time, math
 import plotly.graph_objects as go
 from typing import Tuple
-# from lads_client_sim import Server, FunctionalUnit, Function, AnalogControlFunction, AnalogSensorFunction, AnalogItem, create_server
-from lads_client import BaseControlFunction, Component, CoverFunction, Server, Device, FunctionalUnit, Function, AnalogControlFunction, AnalogSensorFunction, BaseVariable, AnalogItem, StartStopControlFunction, create_connection, DefaultServerUrl
+from lads_client import BaseControlFunction, Component, CoverFunction, Server, Device, FunctionalUnit, Function, AnalogControlFunction, AnalogSensorFunction, BaseVariable, AnalogItem, StartStopControlFunction, MulitModeControlFunction, StateMachine, create_connection, DefaultServerUrl, remove_none
 from asyncua import ua
 
 st.set_page_config(page_title="LADS OPC UA Client", layout="wide")
@@ -38,144 +37,147 @@ def state_color(function: BaseControlFunction) -> str:
     return "blue" if "Running" in s else "red" if "Abort" in s else "gray"
 
 def update_functions(container, functional_unit: FunctionalUnit,):
-    with container:        
-        with st.container():
-            idx = 0
-            for function in functional_unit.functions:
-                if function.is_enabled:
-                    idx += 1
-                    with st.expander(label=f"**{function.display_name}**", expanded=idx < 10):
-                        sp_col, pv_col = st.columns([4, 5])
-                        if isinstance(function, AnalogControlFunction):
+    with container.container():        
+        idx = 0
+        for function in functional_unit.functions:
+            if function.is_enabled:
+                idx += 1
+                with st.expander(label=f"**{function.display_name}**", expanded=idx < 10):
+                    sp_col, pv_col = st.columns([4, 5])
+                    if isinstance(function, AnalogControlFunction):
+                        with sp_col:
+                            # target_value = st.number_input("**37.0** °C", on_change=new_target_value, value= 37.0, key=f"{st.session_state[selectedDeviceKey]}.{function}")
+                            st.write(f"**{format_value(function.target_value.value)}** {function.target_value.eu}")
+                        with pv_col: 
+                            st.write(f":{state_color(function)}[**{format_value(function.current_value.value)}** {function.current_value.eu}]")
+                    elif isinstance(function, AnalogSensorFunction):
+                        with pv_col: 
+                            st.write(f":blue[**{format_value(function.sensor_value.value)}** {function.sensor_value.eu}]")
+                    elif isinstance(function, CoverFunction):
+                        with pv_col: 
+                            st.write(f":blue[**{function.current_state.value_str}**]")
+                    elif isinstance(function, StartStopControlFunction):
+                        with pv_col: 
+                            st.write(f":{state_color(function)}[**{function.current_state.value_str}**]")
+                    elif isinstance(function, MulitModeControlFunction):
+                        for controller_parameter in function.controller_parameters:
                             with sp_col:
                                 # target_value = st.number_input("**37.0** °C", on_change=new_target_value, value= 37.0, key=f"{st.session_state[selectedDeviceKey]}.{function}")
-                                st.write(f"**{format_value(function.target_value.value)}** {function.target_value.eu}")
+                                st.write(f"**{format_value(controller_parameter.target_value.value)}** {controller_parameter.target_value.eu}")
                             with pv_col: 
-                                st.write(f":{state_color(function)}[**{format_value(function.current_value.value)}** {function.current_value.eu}]")
-                        elif isinstance(function, AnalogSensorFunction):
-                            with pv_col: 
-                                st.write(f":blue[**{format_value(function.sensor_value.value)}** {function.sensor_value.eu}]")
-                        elif isinstance(function, CoverFunction):
-                            with pv_col: 
-                                st.write(f":blue[**{function.current_state.value_str}**]")
-                        elif isinstance(function, StartStopControlFunction):
-                            with pv_col: 
-                                st.write(f":{state_color(function)}[**{function.current_state.value_str}**]")
-                       
+                                st.write(f":{state_color(function)}[**{format_value(controller_parameter.current_value.value)}** {controller_parameter.current_value.eu}]")
+                    
 def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
-
-        
-    with container:        
-        with st.container():
-            # collect analog items with history
-            traces: list[Tuple[Function, AnalogItem]] = []
-            arrays: list[Tuple[Function, AnalogItem]] = []
-            idx = 0
+    with container.container():        
+        # collect analog items with history
+        traces: list[Tuple[Function, AnalogItem]] = []
+        arrays: list[Tuple[Function, AnalogItem]] = []
+        idx = 0
 
 
-            for function in functional_unit.functions:
-                analog_item: AnalogItem = None
-                if isinstance(function, AnalogControlFunction):
-                    analog_item = function.current_value
-                elif isinstance(function, AnalogSensorFunction):
-                    analog_item = function.sensor_value
-                if analog_item is not None:
-                    if isinstance(analog_item.value, list):
-                        arrays.append((function, analog_item))
-                    elif analog_item.history is not None:
-                        traces.append((function, analog_item))
+        for function in functional_unit.functions:
+            analog_item: AnalogItem = None
+            if isinstance(function, AnalogControlFunction):
+                analog_item = function.current_value
+            elif isinstance(function, AnalogSensorFunction):
+                analog_item = function.sensor_value
+            if analog_item is not None:
+                if isinstance(analog_item.value, list):
+                    arrays.append((function, analog_item))
+                elif analog_item.history is not None:
+                    traces.append((function, analog_item))
 
-            if use_plotly:
-                # add traces
-                fig = go.Figure()
-                layout_dict = {}
-                pos_left = 0.1
-                pos_right = 0.9
-                layout_dict["xaxis"] = dict(domain=[pos_left, pos_right])
-                index = 0
-                count = len(traces)
-                for trace in traces:
-                    index += 1
-                    function, analog_item = trace
-                    df: pd.DataFrame = analog_item.history
-                    fig.add_trace(go.Scatter(
-                        x = df.index.array,
-                        y = df.iloc[:, 0].array,
-                        name = function.display_name,
-                        yaxis = f"y{index}"
-                    ))
-                    color="#404040"
-                    yaxis_key = "yaxis" if index <= 1 else f"yaxis{index}"
-                    left  = index <= count / 2
-                    side = "left" if left else "right"
-                    position = pos_left - 0.2 * (index - 1) if left else pos_right + 0.2 * ((index - 1) - count / 2)
-                    position = 0 if position < 0 else 1 if position > 1 else position
-                    yaxis_dict = dict(
-                        title = f"{function.display_name} [{analog_item.eu}]",
-                        titlefont = dict(color=color),
-                        tickfont = dict(color=color),
-                    )
-                    if index > 1:
-                        yaxis_dict["anchor"] = "x"
-                        yaxis_dict["overlaying"] = "y"
-                        yaxis_dict["side"] = side
-                        yaxis_dict["position"] = position
-                        
-                    layout_dict[yaxis_key] = yaxis_dict
-                
-            
-                fig.update_layout(layout_dict)
-
-                fig.update_layout(
-                    # title_text = functional_unit.display_name,
-                    width = 1000,
-                    # title_x = 0.1,
-                    legend = dict(yanchor = "top", xanchor = "left", x = 0.7, y = 1.35),
+        if use_plotly:
+            # add traces
+            fig = go.Figure()
+            layout_dict = {}
+            pos_left = 0.1
+            pos_right = 0.9
+            layout_dict["xaxis"] = dict(domain=[pos_left, pos_right])
+            index = 0
+            count = len(traces)
+            for trace in traces:
+                index += 1
+                function, analog_item = trace
+                df: pd.DataFrame = analog_item.history
+                fig.add_trace(go.Scatter(
+                    x = df.index.array,
+                    y = df.iloc[:, 0].array,
+                    name = function.display_name,
+                    yaxis = f"y{index}"
+                ))
+                color="#404040"
+                yaxis_key = "yaxis" if index <= 1 else f"yaxis{index}"
+                left  = index <= count / 2
+                side = "left" if left else "right"
+                position = pos_left - 0.2 * (index - 1) if left else pos_right + 0.2 * ((index - 1) - count / 2)
+                position = 0 if position < 0 else 1 if position > 1 else position
+                yaxis_dict = dict(
+                    title = f"{function.display_name} [{analog_item.eu}]",
+                    titlefont = dict(color=color),
+                    tickfont = dict(color=color),
                 )
-                with st.expander("**Chart**", expanded=(idx==0)):
-                    st.plotly_chart(fig, use_container_width=True)
+                if index > 1:
+                    yaxis_dict["anchor"] = "x"
+                    yaxis_dict["overlaying"] = "y"
+                    yaxis_dict["side"] = side
+                    yaxis_dict["position"] = position
+                    
+                layout_dict[yaxis_key] = yaxis_dict
+            
+        
+            fig.update_layout(layout_dict)
+
+            fig.update_layout(
+                # title_text = functional_unit.display_name,
+                width = 1000,
+                # title_x = 0.1,
+                legend = dict(yanchor = "top", xanchor = "left", x = 0.7, y = 1.35),
+            )
+            with st.expander("**Chart**", expanded=(idx==0)):
+                st.plotly_chart(fig, use_container_width=True)
+                idx += 1
+        else:
+            for trace in traces:
+                function, analog_item = trace
+                with st.expander(f"**Chart {function.display_name}**", expanded=(idx==0)):
+                    st.line_chart(data = analog_item.history, height = 100)
                     idx += 1
-            else:
-                for trace in traces:
-                    function, analog_item = trace
-                    with st.expander(f"**Chart {function.display_name}**", expanded=(idx==0)):
-                        st.line_chart(data = analog_item.history, height = 100)
-                        idx += 1
 
-            # tables
-            for array in arrays:
-                function, analog_item = array
-                value = analog_item.value
-                i = len(value)
-                col_count = int(math.sqrt(3 / 2 * i))
-                row_count = int(2 / 3 * col_count)
-                cols: dict = {}
-                cols["Plate"] = list(range(1, row_count + 1))
-                # cols[f"**{function.display_name}**"] = list(range(1, row_count + 1))
-                for col_idx in range(col_count):
-                    values = []
-                    for row_idx in range(row_count):
-                        values.append(format_number(value[col_idx * row_count + row_idx]))
-                    cols[chr(ord("A") + col_idx)] = values
+        # tables
+        for array in arrays:
+            function, analog_item = array
+            value = analog_item.value
+            i = len(value)
+            col_count = int(math.sqrt(3 / 2 * i))
+            row_count = int(2 / 3 * col_count)
+            cols: dict = {}
+            cols["Plate"] = list(range(1, row_count + 1))
+            # cols[f"**{function.display_name}**"] = list(range(1, row_count + 1))
+            for col_idx in range(col_count):
+                values = []
+                for row_idx in range(row_count):
+                    values.append(format_number(value[col_idx * row_count + row_idx]))
+                cols[chr(ord("A") + col_idx)] = values
 
-                df = pd.DataFrame(cols)
-                if analog_item.eu_range is not None:
-                    eu_range: ua.Range = analog_item.eu_range
-                    df.style.background_gradient(
-                        axis=None, 
-                        vmin=eu_range.Low, 
-                        vmax=eu_range.High,
-                        cmap="BlGnRd"
-                    )
+            df = pd.DataFrame(cols)
+            if analog_item.eu_range is not None:
+                eu_range: ua.Range = analog_item.eu_range
+                df.style.background_gradient(
+                    axis=None, 
+                    vmin=eu_range.Low, 
+                    vmax=eu_range.High,
+                    cmap="BlGnRd"
+                )
 
-                with st.expander(f"**{function.display_name}**", expanded=(idx==0)):
-                    #st.write(f"**{function.display_name}**")
-                    st.dataframe(
-                        df,
-                        use_container_width=True, 
-                        hide_index=True,
-                    )
-                    idx += 1
+            with st.expander(f"**{function.display_name}**", expanded=(idx==0)):
+                #st.write(f"**{function.display_name}**")
+                st.dataframe(
+                    df,
+                    use_container_width=True, 
+                    hide_index=True,
+                )
+                idx += 1
 
 def update_events(container, functional_unit: FunctionalUnit):
     events = functional_unit.subscription_handler.events
@@ -255,19 +257,15 @@ def insert_variables_table(variables: list[BaseVariable], has_description: bool 
     st.dataframe(data, use_container_width=True, hide_index=True, column_config=column_config)
 
 def update_device(container, device: Device):
-    with container:
-        with st.container():
-            col1, col2 = st.columns([1, 2])
-            with col1:
-                state_vars = [
-                    device.state_machine.current_state, 
-                    device.machinery_item_state.current_state,
-                    device.machinery_operation_mode.current_state
-                ]
-                with st.expander(f"**Overview {device.display_name}**", expanded=True):  
-                    insert_variables_table(state_vars)
+    with container.container():
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            state_machines: list[StateMachine] = remove_none([device.state_machine, device.machinery_item_state, device.machinery_operation_mode])
+            state_vars = map(lambda node: node.current_state, state_machines)
+            with st.expander(f"**Overview {device.display_name}**", expanded=True):  
+                insert_variables_table(state_vars)
 
-            update_components(device, expanded_count=1)
+        update_components(device, expanded_count=1)
 
 def update_components(component: Component, expanded_count):
     with st.expander(f"**{component.__class__.__name__} {component.display_name}**", expanded=expanded_count > 0):
@@ -292,6 +290,10 @@ def update_components(component: Component, expanded_count):
 
 selectedFunctionalUnitKey = "selected_functional_unit"
 lastEventListUpdateKey = "last_event_list_update"
+
+def empty(container):
+    container.empty()
+    time.sleep(0.02)
 
 def main():
     my_server = get_server_connection(DefaultServerUrl)
@@ -321,6 +323,7 @@ def main():
 
     tab_functions, tab_program_manager, tab_device = st.tabs(["Operation", "Program Management", "Asset Management"])
     container_functional_unit = st.empty()
+    empty(container_functional_unit)
     with container_functional_unit:
         with tab_functions:
             col1, col2 = st.columns([1, 2])
@@ -328,6 +331,7 @@ def main():
             # Functions list in the detail view
             with col1:
                 container_functions = st.empty()
+                empty(container_functions)
                 update_functions(container_functions, selected_functional_unit)
 
             # Chart in the detail view
@@ -345,6 +349,7 @@ def main():
 
         with tab_device:
             container_device = st.empty()
+            empty(container_device)
             update_device(container_device, selected_functional_unit.device)
 
         # Display the events table
@@ -352,6 +357,7 @@ def main():
             st.divider()
             st.write("**Events**")
             container_events = st.empty()
+            empty(container_events)
             update_events(container_events, selected_functional_unit)
             
         # update loop
