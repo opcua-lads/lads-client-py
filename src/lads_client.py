@@ -536,8 +536,20 @@ class LADSSet(LADSNode):
         previous_node_ids = set(map(lambda node: node.nodeid, previous_nodes))
         new_node_ids = current_node_ids.difference(previous_node_ids)
         deleted_node_ids = previous_node_ids.difference(current_node_ids)
-        # new_nodes = filter(lambda node_id: current_node , new_node_ids)
-        print(self.display_name, len(deleted_node_ids), len(new_node_ids))
+        if len(new_node_ids) > 0:
+            for node_id in new_node_ids:
+                nodes = list(filter(lambda node: node.nodeid == node_id, current_nodes))
+                assert(len(nodes) == 1)
+                node = await self.propagate_child(nodes[0])
+                self.children.append(node)
+                print(f"added new {node.__class__.__name__} {node.display_name}")
+        if len(deleted_node_ids) > 0:
+            for node_id in deleted_node_ids:
+                nodes = list(filter(lambda node: node.nodeid == node_id, previous_nodes))
+                assert(len(nodes) == 1)
+                node = nodes[0]
+                self.children.remove(node)
+        
 
 class OperationCounters(LADSNode):
     operation_cycle_counter: BaseVariable
