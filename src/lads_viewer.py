@@ -4,7 +4,8 @@ import pandas as pd
 import time, math
 import plotly.graph_objects as go
 from typing import Tuple
-from lads_client import BaseControlFunction, Component, CoverFunction, Server, Device, FunctionalUnit, Function, AnalogControlFunction, AnalogSensorFunction, BaseVariable, AnalogItem, StartStopControlFunction, MulitModeControlFunction, StateMachine, create_connection, DefaultServerUrl, remove_none
+from lads_client import  create_connection, DefaultServerUrl, remove_none, BaseVariable, AnalogItem, BaseControlFunction, Component, CoverFunction, Server, Device, FunctionalUnit, \
+    Function, AnalogControlFunction, AnalogSensorFunction, StartStopControlFunction, MulitModeControlFunction, StateMachine, AnalogControlFunctionWithTotalizer
 from asyncua import ua
 
 st.set_page_config(page_title="LADS OPC UA Client", layout="wide")
@@ -34,22 +35,28 @@ def format_number(x: float, decis = 1) -> str:
 
 def state_color(function: BaseControlFunction) -> str:
     s = str(function.current_state.value_str)
-    return "blue" if "Running" in s else "red" if "Abort" in s else "gray"
+    return "green" if "Running" in s else "red" if "Abort" in s else "gray"
 
-def update_functions(container, functional_unit: FunctionalUnit,):
+def update_functions(container, functional_unit: FunctionalUnit):
     with container.container():        
         idx = 0
         for function in functional_unit.functions:
             if function.is_enabled:
                 idx += 1
-                with st.expander(label=f"**{function.display_name}**", expanded=idx < 10):
+                label = f"**{function.display_name}**"
+                # label = f"**{function.display_name}** :gray[{function.__class__.__name__}]"
+                with st.expander(label=label, expanded=idx < 10):
                     sp_col, pv_col = st.columns([4, 5])
                     if isinstance(function, AnalogControlFunction):
                         with sp_col:
                             # target_value = st.number_input("**37.0** °C", on_change=new_target_value, value= 37.0, key=f"{st.session_state[selectedDeviceKey]}.{function}")
-                            st.write(f"**{format_value(function.target_value.value)}** {function.target_value.eu}")
+                            st.write(f":{state_color(function)}[**{format_value(function.target_value.value)}** {function.target_value.eu}]")
+                            if isinstance(function, AnalogControlFunctionWithTotalizer):
+                                st.write(":gray[Totalizer]")
                         with pv_col: 
-                            st.write(f":{state_color(function)}[**{format_value(function.current_value.value)}** {function.current_value.eu}]")
+                            st.write(f":blue[**{format_value(function.current_value.value)}** {function.current_value.eu}]")
+                            if isinstance(function, AnalogControlFunctionWithTotalizer):
+                                st.write(f":blue[**{format_value(function.totalized_value.value)}** {function.totalized_value.eu}]")
                     elif isinstance(function, AnalogSensorFunction):
                         with pv_col: 
                             st.write(f":blue[**{format_value(function.sensor_value.value)}** {function.sensor_value.eu}]")
@@ -63,9 +70,9 @@ def update_functions(container, functional_unit: FunctionalUnit,):
                         for controller_parameter in function.controller_parameters:
                             with sp_col:
                                 # target_value = st.number_input("**37.0** °C", on_change=new_target_value, value= 37.0, key=f"{st.session_state[selectedDeviceKey]}.{function}")
-                                st.write(f"**{format_value(controller_parameter.target_value.value)}** {controller_parameter.target_value.eu}")
+                                st.write(f":{state_color(function)}[**{format_value(controller_parameter.target_value.value)}** {controller_parameter.target_value.eu}]")
                             with pv_col: 
-                                st.write(f":{state_color(function)}[**{format_value(controller_parameter.current_value.value)}** {controller_parameter.current_value.eu}]")
+                                st.write(f":blue[**{format_value(controller_parameter.current_value.value)}** {controller_parameter.current_value.eu}]")
                     
 def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
     with container.container():        
@@ -188,7 +195,6 @@ def update_events(container, functional_unit: FunctionalUnit):
     if last_event_update == last_event_list_update:
         return
     st.session_state[lastEventListUpdateKey] = last_event_update
-    print("updating event list")
     with container:
         with st.container():
             event_columns = events[["Time", "Severity", "SourceName", "Message"]]
@@ -224,7 +230,7 @@ def update_events(container, functional_unit: FunctionalUnit):
                 }
             )
 
-def insert_variables_table(variables: list[BaseVariable], has_description: bool = False):
+def show_variables_table(variables: list[BaseVariable], has_description: bool = False):
     names = []
     values = [] 
     descriptions = []
@@ -256,37 +262,84 @@ def insert_variables_table(variables: list[BaseVariable], has_description: bool 
     }
     st.dataframe(data, use_container_width=True, hide_index=True, column_config=column_config)
 
-def update_device(container, device: Device):
+def update_asset_management(container, device: Device):
     with container.container():
         col1, col2 = st.columns([1, 2])
         with col1:
-            state_machines: list[StateMachine] = remove_none([device.state_machine, device.machinery_item_state, device.machinery_operation_mode])
-            state_vars = map(lambda node: node.current_state, state_machines)
+            state_vars = device.state_machine_variables + device.location_variables
             with st.expander(f"**Overview {device.display_name}**", expanded=True):  
-                insert_variables_table(state_vars)
+                show_variables_table(state_vars)
+        with col2:
+            lat = []
+            lon = []
+            size = []
+            color = []
+            for dev in device.server.devices:
+                location = dev.geographical_location
+                if location is not None:
+                    lat.append(location[0])
+                    lon.append(location[1])
+                    size.append(1000 if dev == device else 500)
+                    color.append("#ff4400" if dev is device else "#0044ff")
+            if len(lat) > 0:
+                df = pd.DataFrame({
+                    "lat": lat,
+                    "lon": lon,
+                    "size": size,
+                    "color": color,
+                    })
+                st.map(df, zoom=6, use_container_width=True)
 
-        update_components(device, expanded_count=1)
+        show_components(device, expanded_count=1)
 
-def update_components(component: Component, expanded_count):
+def show_components(component: Component, expanded_count):
     with st.expander(f"**{component.__class__.__name__} {component.display_name}**", expanded=expanded_count > 0):
         col1, col2, col3 = st.columns(3)
         with col1:
             st.write("Nameplate")
-            insert_variables_table(component.name_plate_variables)
+            show_variables_table(component.name_plate_variables)
         with col2:
             if component.operation_counters is not None:
                 st.write("Operation Counters")
-                insert_variables_table(component.operation_counters.variables)
+                show_variables_table(component.operation_counters.variables)
         with col3:
             if len(component.lifetime_counters) > 0:
                 st.write("Lifetime Counters")
-                insert_variables_table(component.lifetime_counters)
+                show_variables_table(component.lifetime_counters)
 
     if component.components is not None:
         count = expanded_count
         for sub_component in component.components:
             count = count - 1 
-            update_components(sub_component, count)
+            show_components(sub_component, count)
+
+def update_program_template_set(container, functional_unit: FunctionalUnit):
+    with container.container():
+        st.write("**Templates**")
+        program_manager = functional_unit.program_manager
+        if program_manager is None: 
+            return
+        for program_template in program_manager.program_templates:
+            with st.expander(program_template.display_name, expanded=False):
+                show_variables_table(program_template.variables)
+
+def update_active_program(container, functional_unit: FunctionalUnit):
+    with container.container():
+        st.write(f"**Active Program ({functional_unit.state_machine.current_state.value_str})**")
+        program_manager = functional_unit.program_manager
+        if program_manager is None: 
+            return
+        show_variables_table(program_manager.variables)
+
+def update_result_set(container, functional_unit: FunctionalUnit):
+    with container.container():
+        st.write("**Results**")
+        program_manager = functional_unit.program_manager
+        if program_manager is None: 
+            return
+        for result in program_manager.results:
+            with st.expander(result.display_name, expanded=False):
+                show_variables_table(result.variables)
 
 selectedFunctionalUnitKey = "selected_functional_unit"
 lastEventListUpdateKey = "last_event_list_update"
@@ -294,6 +347,7 @@ lastEventListUpdateKey = "last_event_list_update"
 def empty(container):
     container.empty()
     time.sleep(0.02)
+    return container
 
 def main():
     my_server = get_server_connection(DefaultServerUrl)
@@ -308,16 +362,17 @@ def main():
 
     container_functions = None
     
-    # Devices list on the left side
+    # functional-unit list on the left side
     st.session_state[selectedFunctionalUnitKey] = st.sidebar.selectbox("Select a functional-unit", functional_unit_names)
 
-    # Title and description
+    # get selected functional-unit
     selected_functional_unit = functional_units[0]
     selected_functional_unit_name = st.session_state[selectedFunctionalUnitKey]
     for functional_unit in functional_units:
         if functional_unit.unique_name == selected_functional_unit_name:
             selected_functional_unit = functional_unit
 
+    # title
     st.header("LADS OPC UA Client")
     st.write(f"**{selected_functional_unit.unique_name}**")
 
@@ -341,16 +396,19 @@ def main():
         with tab_program_manager:
             col_templates, col_status, col_results = st.columns([1, 1, 1])
             with col_templates:
-                st.write("**Templates**")
+                container_templates = empty(st.empty())
+                update_program_template_set(container_templates, selected_functional_unit)
             with col_status:
-                st.write("**Status**")
+                container_active_program = empty(st.empty())
+                update_active_program(container_active_program, selected_functional_unit)
             with col_results:
-                st.write("**Results**")
+                container_results = empty(st.empty())
+                update_result_set(container_results, selected_functional_unit)
 
         with tab_device:
             container_device = st.empty()
             empty(container_device)
-            update_device(container_device, selected_functional_unit.device)
+            update_asset_management(container_device, selected_functional_unit.device)
 
         # Display the events table
         with st.container():
@@ -366,11 +424,13 @@ def main():
         while(True):
             update_functions(container_functions, selected_functional_unit)
             update_events(container_events, selected_functional_unit)
-            update_device(container_device, selected_functional_unit.device)
+            update_active_program(container_active_program, selected_functional_unit)
+            update_asset_management(container_device, selected_functional_unit.device)
             index += 1
             if index >= 5:
                 index = 0
                 update_charts(container_chart, selected_functional_unit, True)
+                update_result_set(container_results, selected_functional_unit)
             time.sleep(1)
 
 if __name__ == '__main__':
