@@ -4,7 +4,7 @@ import pandas as pd
 import time, math
 import plotly.graph_objects as go
 from typing import Tuple
-from lads_client import  create_connection, DefaultServerUrl, remove_none, BaseVariable, AnalogItem, BaseControlFunction, Component, CoverFunction, Server, Device, FunctionalUnit, \
+from lads_client import  BaseStateMachineFunction, FunctionalStateMachine, create_connection, DefaultServerUrl, remove_none, BaseVariable, AnalogItem, BaseControlFunction, Component, CoverFunction, Server, Device, FunctionalUnit, \
     Function, AnalogControlFunction, AnalogSensorFunction, StartStopControlFunction, MulitModeControlFunction, StateMachine, AnalogControlFunctionWithTotalizer
 from asyncua import ua
 
@@ -37,50 +37,81 @@ def state_color(function: BaseControlFunction) -> str:
     s = str(function.current_state.value_str)
     return "green" if "Running" in s else "red" if "Abort" in s else "gray"
 
-def update_functions(container, functional_unit: FunctionalUnit):
-    with container.container():        
+def call_state_machine_method(function: BaseStateMachineFunction):
+    if function is None: return
+    key = function.unique_name
+    if not key in st.session_state:
+        st.session_state[key] = None
+    method_name = st.session_state[key]
+    function.state_machine.call_method_by_name(method_name)
+
+def show_functions(container, functional_unit: FunctionalUnit) -> dict:
+    with container.container():
         idx = 0
+        function_containers = {}
         for function in functional_unit.functions:
             if function.is_enabled:
                 idx += 1
                 label = f"**{function.display_name}**"
                 # label = f"**{function.display_name}** :gray[{function.__class__.__name__}]"
                 with st.expander(label=label, expanded=idx < 10):
-                    sp_col, pv_col = st.columns([4, 5])
-                    if isinstance(function, AnalogControlFunction):
-                        with sp_col:
-                            # target_value = st.number_input("**37.0** °C", on_change=new_target_value, value= 37.0, key=f"{st.session_state[selectedDeviceKey]}.{function}")
-                            st.write(f":{state_color(function)}[**{format_value(function.target_value.value)}** {function.target_value.eu}]")
-                            if isinstance(function, AnalogControlFunctionWithTotalizer):
-                                st.write(":gray[Totalizer]")
-                        with pv_col: 
-                            st.write(f":blue[**{format_value(function.current_value.value)}** {function.current_value.eu}]")
-                            if isinstance(function, AnalogControlFunctionWithTotalizer):
-                                st.write(f":blue[**{format_value(function.totalized_value.value)}** {function.totalized_value.eu}]")
-                    elif isinstance(function, AnalogSensorFunction):
-                        with pv_col: 
-                            st.write(f":blue[**{format_value(function.sensor_value.value)}** {function.sensor_value.eu}]")
-                    elif isinstance(function, CoverFunction):
-                        with pv_col: 
-                            st.write(f":blue[**{function.current_state.value_str}**]")
-                    elif isinstance(function, StartStopControlFunction):
-                        with pv_col: 
-                            st.write(f":{state_color(function)}[**{function.current_state.value_str}**]")
-                    elif isinstance(function, MulitModeControlFunction):
-                        for controller_parameter in function.controller_parameters:
-                            with sp_col:
+                    col_static, col_sp, col_pv = st.columns([4, 4, 5])
+                    with col_static:
+                        if isinstance(function, BaseStateMachineFunction):
+                            method_names = function.state_machine.method_names
+                            if len(method_names) > 0:
+                                cmd = st.selectbox("Command", method_names, label_visibility="collapsed", key=function.unique_name, on_change=call_state_machine_method(function))                                
+                            if isinstance(function, AnalogControlFunction):
                                 # target_value = st.number_input("**37.0** °C", on_change=new_target_value, value= 37.0, key=f"{st.session_state[selectedDeviceKey]}.{function}")
-                                st.write(f":{state_color(function)}[**{format_value(controller_parameter.target_value.value)}** {controller_parameter.target_value.eu}]")
-                            with pv_col: 
-                                st.write(f":blue[**{format_value(controller_parameter.current_value.value)}** {controller_parameter.current_value.eu}]")
-                    
+                                pass
+                    with col_sp:
+                        container_sp = st.empty()
+                    with col_pv:
+                        container_pv = st.empty()
+                    function_containers[function] = (container_sp, container_pv)
+    update_functions(function_containers)
+    return function_containers
+
+def update_functions(function_containers: dict):
+
+    for function, containers in function_containers.items():
+        container_sp, container_pv = containers
+        # empty(container_sp)
+        # empty(container_pv)
+        sp_col = container_sp.container()
+        pv_col = container_pv.container()
+        if isinstance(function, AnalogControlFunction):
+            color = state_color(function)
+            with sp_col:
+                st.write(f":{color}[**{format_value(function.target_value.value)}** {function.target_value.eu}]")
+                if isinstance(function, AnalogControlFunctionWithTotalizer):
+                    st.write(":gray[Totalizer]")
+            with pv_col: 
+                st.write(f":blue[**{format_value(function.current_value.value)}** {function.current_value.eu}]")
+                if isinstance(function, AnalogControlFunctionWithTotalizer):
+                    st.write(f":blue[**{format_value(function.totalized_value.value)}** {function.totalized_value.eu}]")
+        elif isinstance(function, AnalogSensorFunction):
+            with pv_col: 
+                st.write(f":blue[**{format_value(function.sensor_value.value)}** {function.sensor_value.eu}]")
+        elif isinstance(function, CoverFunction):
+            with pv_col: 
+                st.write(f":blue[**{function.current_state.value_str}**]")
+        elif isinstance(function, StartStopControlFunction):
+            with pv_col: 
+                st.write(f":{state_color(function)}[**{function.current_state.value_str}**]")
+        elif isinstance(function, MulitModeControlFunction):
+            for controller_parameter in function.controller_parameters:
+                with sp_col:
+                    st.write(f":{state_color(function)}[**{format_value(controller_parameter.target_value.value)}** {controller_parameter.target_value.eu}]")
+                with pv_col: 
+                    st.write(f":blue[**{format_value(controller_parameter.current_value.value)}** {controller_parameter.current_value.eu}]")
+        
 def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
     with container.container():        
         # collect analog items with history
         traces: list[Tuple[Function, AnalogItem]] = []
         arrays: list[Tuple[Function, AnalogItem]] = []
         idx = 0
-
 
         for function in functional_unit.functions:
             analog_item: AnalogItem = None
@@ -381,16 +412,18 @@ def main():
     empty(container_functional_unit)
     with container_functional_unit:
         with tab_functions:
-            col1, col2 = st.columns([1, 2])
+            col_functions, col_chart = st.columns([2, 3])
 
             # Functions list in the detail view
-            with col1:
-                container_functions = st.empty()
-                empty(container_functions)
-                update_functions(container_functions, selected_functional_unit)
+            with col_functions:
+                container_functions = empty(st.empty())
+                function_containers = show_functions(container_functions, selected_functional_unit)
+                # container_functions = st.empty()
+                # empty(container_functions)
+                # update_functions(container_functions, selected_functional_unit)
 
             # Chart in the detail view
-            with col2:
+            with col_chart:
                 container_chart = st.empty()
 
         with tab_program_manager:
@@ -422,7 +455,7 @@ def main():
         cf = 0.1
         index = 5
         while(True):
-            update_functions(container_functions, selected_functional_unit)
+            update_functions(function_containers)
             update_events(container_events, selected_functional_unit)
             update_active_program(container_active_program, selected_functional_unit)
             update_asset_management(container_device, selected_functional_unit.device)

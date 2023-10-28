@@ -18,6 +18,7 @@ _logger = logging.getLogger(__name__)
 LADSNode = NewType("LADSNode", Node)
 #LADSSet = NewType("LADSSet", LADSNode)
 BaseVariable = NewType("BaseVariable", LADSNode)
+Method = NewType("Method", LADSNode)
 Component = NewType("Component", LADSNode)
 Device = NewType("Device", Component)
 FunctionalUnit = NewType("FunctionalUnit", LADSNode)
@@ -61,7 +62,7 @@ class Server():
         self.devices: list[Device] = []
         self.initialized = False
         self.running = True
-        self.queue = Queue()
+        self.call_async_queue = Queue()
 
     async def init(self):
         # read namespace indices
@@ -106,12 +107,13 @@ class Server():
         self.initialized = True
 
     async def evaluate(self):
-        if not self.queue.empty():
-            item = self.queue.get()
+        if not self.call_async_queue.empty():
+            item = self.call_async_queue.get()
             if item is not None:
-                print(item)
-                if isinstance(item, LADSSet):
-                    await item.update_children()
+                try:
+                    await item
+                except Exception as error:
+                    _logger.debug(error)
         await asyncio.sleep(0.01)
 
     def get_di_node(self, id: int) -> Node | None:
@@ -278,6 +280,9 @@ class LADSNode(Node):
     
     def __str__(self):
         return f"{self.__class__.__name__}({self.display_name})"
+    
+    def call_async(self, func):
+        self.server.call_async_queue.put(func)
 
     async def get_child_or_none(self, name : ua.QualifiedName) -> Node:
         try:
@@ -286,22 +291,22 @@ class LADSNode(Node):
             return None
         
     async def get_di_child(self, name : str) -> Node:
-            return await self.get_child_or_none(ua.QualifiedName(name, self.server.ns_DI))
+        return await self.get_child_or_none(ua.QualifiedName(name, self.server.ns_DI))
     
     async def get_di_variable(self, name : str) -> BaseVariable:
-            return await BaseVariable.propagate(await self.get_di_child(name), self.server)
+        return await BaseVariable.propagate(await self.get_di_child(name), self.server)
     
     async def get_machinery_child(self, name : str) -> Node:
-            return await self.get_child_or_none(ua.QualifiedName(name, self.server.ns_Machinery))
+        return await self.get_child_or_none(ua.QualifiedName(name, self.server.ns_Machinery))
     
     async def get_machinery_variable(self, name : str) -> BaseVariable:
-            return await BaseVariable.propagate(await self.get_machinery_child(name), self.server)
+        return await BaseVariable.propagate(await self.get_machinery_child(name), self.server)
     
     async def get_lads_child(self, name : str) -> Node:
-            return await self.get_child_or_none(ua.QualifiedName(name, self.server.ns_LADS))
+        return await self.get_child_or_none(ua.QualifiedName(name, self.server.ns_LADS))
     
     async def get_lads_variable(self, name : str) -> BaseVariable:
-            return await BaseVariable.propagate(await self.get_lads_child(name), self.server)
+        return await BaseVariable.propagate(await self.get_lads_child(name), self.server)
     
     async def get_child_objects(self, parent: Node = None) -> list[Node]:
         if parent is None: parent = self
@@ -314,6 +319,17 @@ class LADSNode(Node):
         child_objects = set(has_child_objects)
         child_objects.update(organizes_objects)
         return list(child_objects)
+    
+    async def call_lads_method(self, name: str, *args: Any) -> ua.StatusCode:
+        try:
+            return await self.call_method(ua.QualifiedName(name, self.server.ns_LADS), args)
+        except:
+            return ua.StatusCodes.BadNotImplemented
+        
+class Method(LADSNode):
+    @classmethod
+    async def propagate(cls, node: Node, server: Server) -> Self:
+        return await propagate_to(Method, node, None, server)
 
 class BaseVariable(LADSNode):
     subscription_level = SubscriptionLevel.Never
@@ -474,6 +490,8 @@ class LifetimeCounter(AnalogItem):
         )
 
 class StateMachine(LADSNode):
+    methods: list[Method] = []
+    methods_dict: dict[str, Method]
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
         return await propagate_to(StateMachine, node, server.FiniteStateMachineType, server)
@@ -482,10 +500,36 @@ class StateMachine(LADSNode):
         await super().init(server)
         self.current_state = await StateVariable.propagate(await self.get_child("CurrentState"), server)
         self.current_state.alternate_display_name = self.display_name
+        nodes = await self.get_methods()
+        self.methods = await asyncio.gather(*(Method.propagate(node, server) for node in nodes))
+        self.methods_dict = {method.display_name: method for method in self.methods}
     
+    @property
+    def method_names(self) -> list[str]:
+        return self.methods_dict.keys()
+    
+    def call_method_by_name(self, name: str, *args):
+        try:
+            method = self.methods_dict[name]
+            if method is not None:
+                self.server.call_async_queue.put(self.call_method(method.nodeid, *args))
+        except:
+            _logger.debug(f"Unknwon method {name}")
+
     @property
     def variables(self) -> list[BaseVariable]:
         return super().variables + [self.current_state]
+
+class FunctionalStateMachine(StateMachine):
+    @classmethod
+    async def propagate(cls, node: Node, server: Server) -> Self:
+        return await propagate_to(FunctionalStateMachine, node, server.FiniteStateMachineType, server)
+    
+    def start(self):
+        self.call_async(self.call_lads_method("Start"))
+
+    async def stop(self)-> ua.StatusCode:
+        self.call_async(self.call_lads_method("Stop"))
 
 class LADSSet(LADSNode):
     @classmethod
@@ -527,7 +571,7 @@ class LADSSet(LADSNode):
         return [] if self.node_version is None else [self.node_version]
     
     def node_version_changed(self):
-        self.server.queue.put(self)
+        self.call_async(self.update_children())
     
     async def update_children(self):
         current_nodes = await self.get_child_objects(self)
@@ -550,7 +594,6 @@ class LADSSet(LADSNode):
                 node = nodes[0]
                 self.children.remove(node)
         
-
 class OperationCounters(LADSNode):
     operation_cycle_counter: BaseVariable
     operation_duration: BaseVariable
@@ -910,6 +953,9 @@ class Function(LADSNode):
 
 class BaseStateMachineFunction(Function):
     state_machine: StateMachine
+
+    def __str__(self):
+        return f"{super().__str__()}\n  {self.current_state}"
     
     async def init(self, server: Server):
         await super().init(server)        
@@ -924,11 +970,10 @@ class BaseStateMachineFunction(Function):
         return self.state_machine.current_state
 
 class BaseControlFunction(BaseStateMachineFunction):
-    def __str__(self):
-        return f"{super().__str__()}\n  {self.current_state}"
-
     async def init(self, server: Server):
-        await super().init(server)        
+        await super().init(server)
+        if self.state_machine:        
+            self.state_machine = await FunctionalStateMachine.propagate(self.state_machine, server)
 
 class StartStopControlFunction(BaseControlFunction):#
     @classmethod
@@ -1051,7 +1096,9 @@ class CoverFunction(BaseStateMachineFunction):
              
 async def propagate_to(cls: Type, node: Node, type_node: Node, server: Server) -> LADSNode:
     if node is None: return None
-    assert await is_of_type(server, node, type_node)
+    node_class = await node.read_node_class()
+    if node_class != ua.NodeClass.Method:
+        assert await is_of_type(server, node, type_node)
     node.__class__ = cls
     propagated_node : cls = node
     await propagated_node.init(server)
