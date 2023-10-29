@@ -2,7 +2,7 @@ import asyncio
 import logging
 import pandas as pd
 import datetime as dt
-from typing import Type, NewType, Any, Self, Tuple
+from typing import Type, NewType, Any, Self, Tuple, Set
 from asyncua import Client, ua, Node
 from asyncua.common.subscription import DataChangeNotif
 from asyncua.common.events import Event
@@ -333,6 +333,11 @@ class Method(LADSNode):
 
 class BaseVariable(LADSNode):
     subscription_level = SubscriptionLevel.Never
+    data_value: ua.DataValue
+    data_type: ua.VariantType
+    access_level: Set[ua.AccessLevel]
+    history: pd.DataFrame
+
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
         return await propagate_to(BaseVariable, node, server.BaseVariableType, server)
@@ -342,14 +347,38 @@ class BaseVariable(LADSNode):
     
     async def init(self, server: Server):
         await super().init(server)
-        (self.data_value, historizing) = await asyncio.gather(
+        (self.data_value, self.data_type, self.access_level, historizing) = await asyncio.gather(
             self.read_data_value(raise_on_bad_status=False),
+            self.read_data_type_as_variant_type(),
+            self.get_access_level(),
             self.read_attribute(ua.AttributeIds.Historizing)
         )
         self.history = None
         if (historizing.Value.Value):
             self.subscription_level = SubscriptionLevel.Permanent
             self.history = pd.DataFrame({f"{self.display_name}": [self.value]}, index = [pd.to_datetime(self.data_value.SourceTimestamp)])
+
+    def set_value(self, value: Any) -> ua.StatusCode:
+        if self.has_write_access:
+            self.server.call_async_queue.put(self.write_value(value, self.data_type))
+            return ua.StatusCodes.Uncertain
+        else:
+            return ua.StatusCodes.BadNotWritable
+
+    async def set_value_async(self, value: Any) -> ua.StatusCode:
+        if self.has_write_access:
+            result = ua.StatusCodes.Good
+            try:
+                await self.write_value(value, self.data_type)
+            except:
+                result = ua.StatusCodes.BadInvalidArgument
+            return result
+        else:
+            return ua.StatusCodes.BadNotWritable
+
+    @property
+    def has_write_access(self) -> bool:
+        return ua.AccessLevel.CurrentWrite in self.access_level
 
     @property
     def value(self) -> Any:

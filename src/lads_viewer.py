@@ -4,7 +4,7 @@ import pandas as pd
 import time, math
 import plotly.graph_objects as go
 from typing import Tuple
-from lads_client import  BaseStateMachineFunction, FunctionalStateMachine, create_connection, DefaultServerUrl, remove_none, BaseVariable, AnalogItem, BaseControlFunction, Component, CoverFunction, Server, Device, FunctionalUnit, \
+from lads_client import  BaseStateMachineFunction, FunctionalStateMachine, LADSNode, create_connection, DefaultServerUrl, remove_none, BaseVariable, AnalogItem, BaseControlFunction, Component, CoverFunction, Server, Device, FunctionalUnit, \
     Function, AnalogControlFunction, AnalogSensorFunction, StartStopControlFunction, MulitModeControlFunction, StateMachine, AnalogControlFunctionWithTotalizer
 from asyncua import ua
 
@@ -45,6 +45,21 @@ def call_state_machine_method(function: BaseStateMachineFunction):
     method_name = st.session_state[key]
     function.state_machine.call_method_by_name(method_name)
 
+def write_variable_value(variable: BaseVariable):
+    if variable is None: 
+        return
+    key = variable.nodeid
+    if not key in st.session_state:
+        return
+    variable.set_value(st.session_state[key])
+
+def add_variable_value_input(variable: BaseVariable, parent: LADSNode = None):
+    if variable.has_write_access:
+        help = f"{variable.display_name}: {variable.description.Text}"
+        if parent is not None:
+            help = f"{parent.display_name}.{help}"
+        st.number_input(variable.display_name, on_change = write_variable_value(variable), value = float(variable.value), key=f"{variable.nodeid}", label_visibility="collapsed", help = help)
+
 def show_functions(container, functional_unit: FunctionalUnit) -> dict:
     with container.container():
         idx = 0
@@ -58,12 +73,14 @@ def show_functions(container, functional_unit: FunctionalUnit) -> dict:
                     col_static, col_sp, col_pv = st.columns([4, 4, 5])
                     with col_static:
                         if isinstance(function, BaseStateMachineFunction):
+                            if isinstance(function, AnalogControlFunction):
+                                add_variable_value_input(function.target_value, function)
+                            elif isinstance(function, MulitModeControlFunction):
+                                for controller_parameter in function.controller_parameters:
+                                    add_variable_value_input(controller_parameter.target_value, controller_parameter)
                             method_names = function.state_machine.method_names
                             if len(method_names) > 0:
                                 cmd = st.selectbox("Command", method_names, label_visibility="collapsed", key=function.unique_name, on_change=call_state_machine_method(function))                                
-                            if isinstance(function, AnalogControlFunction):
-                                # target_value = st.number_input("**37.0** °C", on_change=new_target_value, value= 37.0, key=f"{st.session_state[selectedDeviceKey]}.{function}")
-                                pass
                     with col_sp:
                         container_sp = st.empty()
                     with col_pv:
@@ -76,8 +93,6 @@ def update_functions(function_containers: dict):
 
     for function, containers in function_containers.items():
         container_sp, container_pv = containers
-        # empty(container_sp)
-        # empty(container_pv)
         sp_col = container_sp.container()
         pv_col = container_pv.container()
         if isinstance(function, AnalogControlFunction):
