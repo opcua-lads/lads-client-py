@@ -851,9 +851,75 @@ class Result(LADSNode):
     def variables(self) ->list[BaseVariable]:
         return self._variables
 
+class ActiveProgram(LADSNode):
+    current_runtime: BaseVariable
+    current_pause_time: BaseVariable
+    current_step_name: BaseVariable
+    curent_step_number: BaseVariable
+    current_step_runtime: BaseVariable
+    estimated_runtime: BaseVariable
+    estimated_step_numbers: BaseVariable
+    estimated_step_runtime: BaseVariable
+    device_program_run_id: BaseVariable
+    program_template: ProgramTemplate
+    _variables: list[BaseVariable]
+
+    @classmethod
+    async def propagate(cls, node: Node, server: Server) -> Self:
+        return await propagate_to(ActiveProgram, node, server.BaseObjectType, server)
+
+    def find_variable(self, name: str) -> BaseVariable:
+        if self._variables is None:
+            return None
+        match = list(filter(lambda variable: name in variable.browse_name.Name , self._variables))
+        return None if len(match) == 0 else match[0]
+
+    async def init(self, server: Server):
+        await super().init(server)
+        self._variables = await get_properties_and_variables(self)
+        self._variables.sort(key = lambda variable: variable.display_name)
+        for variable in self._variables:
+            variable.subscription_level = SubscriptionLevel.Temporary
+        self.current_runtime = self.find_variable("CurrentRuntime")
+        self.current_pause_time = self.find_variable("CurrentPauseTime")
+        self.current_step_name = self.find_variable("CurrentStepName")
+        self.current_step_number = self.find_variable("CurrentStepNumber")
+        self.current_step_runtime = self.find_variable("CurrentStepRuntime")
+        self.estimated_runtime = self.find_variable("EstimatedRuntime")
+        self.estimated_step_numbers = self.find_variable("EstimatedStepNumbers")
+        self.estimated_step_runtime = self.find_variable("EstimatedStepRuntime")
+        self.device_program_run_id = self.find_variable("DeviceProgramRunId")
+
+    @property
+    def variables(self) ->list[BaseVariable]:
+        return self._variables
+    
+    @property
+    def has_progress(self) -> bool:
+        return not (self.current_runtime is None or self.estimated_runtime is None)
+    
+    @property
+    def current_progress(self) -> float:
+        try:
+            return self.current_runtime.value / self.estimated_runtime.value
+        except:
+            return 0.0
+
+    @property
+    def has_step_progress(self) -> bool:
+        return not (self.current_step_runtime is None or self.estimated_step_runtime is None)
+    
+    @property
+    def current_step_progress(self) -> float:
+        try:
+            return self.current_step_runtime.value / self.estimated__step_runtime.value
+        except:
+            return 0.0
+
 class ProgramManager(LADSNode):
     program_template_set: LADSSet
     result_set: LADSSet
+    active_program: ActiveProgram
 
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
@@ -865,21 +931,20 @@ class ProgramManager(LADSNode):
         self.result_set = await LADSSet.propagate(await self.get_lads_child("ResultSet"), server)
         await self.program_template_set.propagate_children(ProgramTemplate, server.BaseObjectType, server.BaseObjectType)
         await self.result_set.propagate_children(Result, server.BaseObjectType, server.BaseObjectType)
-
-        self.active_program = await LADSNode.propagate(await self.get_lads_child("ActiveProgram"), server)
-        self._variables = await get_properties_and_variables(self.active_program)
-        self._variables.sort(key = lambda variable: variable.display_name)
-        for variable in self.variables:
-            variable.subscription_level = SubscriptionLevel.Temporary
+        self.active_program = await ActiveProgram.propagate(await self.get_lads_child("ActiveProgram"), server)
 
     @property
     def variables(self) ->list[BaseVariable]:
-        return self._variables + remove_none([self.program_template_set.node_version, self.result_set.node_version])
-
+        return self.active_program.variables + [self.program_template_set.node_version, self.result_set.node_version]
+    
     @property
     def program_templates(self) -> list[ProgramTemplate]:
         return self.program_template_set.children
 
+    @property
+    def program_template_names(self) -> list[str]:
+        return list(map(lambda template: template.display_name, self.program_templates))
+    
     @property
     def results(self) -> list[Result]:
         return self.result_set.children
@@ -1148,20 +1213,29 @@ async def get_properties_and_variables(node: LADSNode) -> list[BaseVariable]:
     return result
 
 async def run_connection_async(client: Client, server: Server):
-    async with client:
+    reconnecting = False
+    while server.running:
         try:
-            await server.init()
-            while server.running:
-                await server.evaluate()
-        #except Exception as error:
-            #print(error)
-        finally:
-            await client.disconnect()
-            print("disconnected")
-
-        # calling a method on server
-        # res = await obj.call_method("2:multiply", 3, "klk")
-        # _logger.info("method result is: %r", res)
+            async with client:
+                if reconnecting:
+                    # does not work :-(
+                    # await client.disconnect()
+                    await client.disconnect_socket()
+                    await asyncio.sleep(2)
+                    await client.connect()
+                    reconnecting = False
+                await server.init()
+                while server.running:
+                    await server.evaluate()
+                    await client.check_connection()
+        except (ConnectionError, ua.UaError):
+            _logger.warning("Reconnecting in 2 seconds")
+            reconnecting = True
+        except Exception as error:
+            _logger.error(error)
+            await asyncio.sleep(2)
+    await client.disconnect()
+    print("disconnected")
 
 import threading
 
@@ -1179,14 +1253,15 @@ def create_connection(url = "opc.tcp://localhost:26543") -> Server:
     t.start()
     while not server.initialized:
         time.sleep(0.1)
-    for device in server.devices:
-        print (device)
-        for component in device.components:
-            print(component)
-        for functional_unit in device.functional_units:
-            print(functional_unit)
-            for function in functional_unit.functions:
-                print(function) 
+    if False:
+        for device in server.devices:
+            print (device)
+            for component in device.components:
+                print(component)
+            for functional_unit in device.functional_units:
+                print(functional_unit)
+                for function in functional_unit.functions:
+                    print(function) 
     return server 
 
 def main():

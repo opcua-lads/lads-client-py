@@ -369,13 +369,43 @@ def update_program_template_set(container, functional_unit: FunctionalUnit):
             with st.expander(program_template.display_name, expanded=False):
                 show_variables_table(program_template.variables)
 
+def show_active_program(container, functional_unit: FunctionalUnit) -> any:
+    with container.container():
+        st.write("**Active Program**")
+        program_manager = functional_unit.program_manager
+        if not program_manager is None: 
+            with st.form("Start Program"):
+                template_id = st.selectbox("Program template", program_manager.program_template_names)
+                key_value_df = st.data_editor(pd.DataFrame({"Key": [], "Value": []}, dtype="string"),
+                                            column_config={"Key": st.column_config.TextColumn(), 
+                                                           "Value": st.column_config.TextColumn()},
+                                            num_rows="dynamic", hide_index=True, use_container_width=True)
+                job_id = st.text_input("Supervisory job id", value="My Job")
+                task_id = st.text_input("Supervisory task id", value="My Task")
+                samples_df = st.data_editor(pd.DataFrame({"ContainerId": [], "SampleId": [], "Position": [], "CustomData": []}, dtype="string"),
+                                            column_config={"ContainerId": st.column_config.TextColumn(), 
+                                                           "SampleId": st.column_config.TextColumn(),
+                                                           "Position": st.column_config.TextColumn(),
+                                                           "CustomData": st.column_config.TextColumn(),
+                                                           },
+                                            num_rows="dynamic", hide_index=True, use_container_width=True)
+                submitted = st.form_submit_button("Start Program")
+    progress_container = st.empty()
+    update_active_program(progress_container, functional_unit)
+    return progress_container
+                        
 def update_active_program(container, functional_unit: FunctionalUnit):
     with container.container():
-        st.write(f"**Active Program ({functional_unit.state_machine.current_state.value_str})**")
+        st.write(f"Current state **{functional_unit.state_machine.current_state.value_str}**")
         program_manager = functional_unit.program_manager
         if program_manager is None: 
             return
-        show_variables_table(program_manager.variables)
+        active_program = program_manager.active_program
+        if active_program.has_progress:
+            st.progress(active_program.current_progress, "Program run progress")
+        if active_program.has_step_progress:
+            st.progress(active_program.current_step_progress, "Program step progress")
+        show_variables_table(active_program.variables)
 
 def update_result_set(container, functional_unit: FunctionalUnit):
     with container.container():
@@ -448,7 +478,7 @@ def main():
                 update_program_template_set(container_templates, selected_functional_unit)
             with col_status:
                 container_active_program = empty(st.empty())
-                update_active_program(container_active_program, selected_functional_unit)
+                progress_container = show_active_program(container_active_program, selected_functional_unit)
             with col_results:
                 container_results = empty(st.empty())
                 update_result_set(container_results, selected_functional_unit)
@@ -472,7 +502,7 @@ def main():
         while(True):
             update_functions(function_containers)
             update_events(container_events, selected_functional_unit)
-            update_active_program(container_active_program, selected_functional_unit)
+            update_active_program(progress_container, selected_functional_unit)
             update_asset_management(container_device, selected_functional_unit.device)
             index += 1
             if index >= 5:
