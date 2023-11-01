@@ -97,6 +97,9 @@ class Server():
         self.StartStopControlFunctionType = self.get_lads_node(LADSObjectIds.StartStopControlFunctionType)
         self.CoverFunctionType = self.get_lads_node(LADSObjectIds.CoverFunctionType)
 
+        # read data tyoes
+        self.data_types = await self.client.load_data_type_definitions()
+
         # browse for devices in DeviceSet
         device_set = await self.client.nodes.objects.get_child(f"{self.ns_DI}:DeviceSet")
         nodes = await device_set.get_children(refs = ua.ObjectIds.HasChild, nodeclassmask = ua.NodeClass.Object)
@@ -322,8 +325,9 @@ class LADSNode(Node):
     
     async def call_lads_method(self, name: str, *args: Any) -> ua.StatusCode:
         try:
-            return await self.call_method(ua.QualifiedName(name, self.server.ns_LADS), args)
-        except:
+            return await self.call_method(ua.QualifiedName(name, self.server.ns_LADS), *args)
+        except Exception as error:
+            print(error)
             return ua.StatusCodes.BadNotImplemented
         
 class Method(LADSNode):
@@ -554,6 +558,36 @@ class FunctionalStateMachine(StateMachine):
     async def propagate(cls, node: Node, server: Server) -> Self:
         return await propagate_to(FunctionalStateMachine, node, server.FiniteStateMachineType, server)
     
+    def start_program(self, program_template: str, properties: pd.DataFrame, supervisory_job_id: str, supervisory_task_id: str, samples: pd.DataFrame):
+        key_value_list = None
+        for index, row in properties.iterrows():
+            key_value_cls = self.server.data_types["KeyValueType"]
+            key_value = key_value_cls(
+                str(row["Key"]), 
+                str(row["Value"])
+            )
+            if key_value_list is None:
+                key_value_list = []
+            key_value_list.append(key_value)
+        sample_info_list = None
+        for index, row in samples.iterrows():
+            sample_info_cls = self.server.data_types["SampleInfoType"]
+            sample_info = sample_info_cls(
+                str(row["ContainerId"]),
+                str(row["SampleId"]),
+                str(row["Position"]),
+                str(row["CustomData"]),
+            )
+            if sample_info_list is None:
+                sample_info_list = []
+            sample_info_list.append(sample_info)
+        self.call_async(self.call_lads_method("StartProgram", 
+                                              program_template, 
+                                              key_value_list, 
+                                              supervisory_job_id, 
+                                              supervisory_task_id, 
+                                              sample_info_list))
+            
     def start(self):
         self.call_async(self.call_lads_method("Start"))
 
@@ -954,7 +988,7 @@ class FunctionalUnit(LADSNode):
     async def propagate(cls, node: Node, server: Server) -> Self:
         return await propagate_to(FunctionalUnit, node, server.FunctionalUnitType, server)
     
-    state_machine: StateMachine
+    state_machine: FunctionalStateMachine
     function_set: FunctionSet
     program_manager: ProgramManager
 
@@ -962,7 +996,7 @@ class FunctionalUnit(LADSNode):
         await super().init(server)
         self.function_set, self.state_machine, self.program_manager = await asyncio.gather(
             FunctionSet.propagate(await self.get_lads_child("FunctionSet"), server),
-            StateMachine.propagate(await self.get_lads_child("StateMachine"), server),
+            FunctionalStateMachine.propagate(await self.get_lads_child("StateMachine"), server),
             ProgramManager.propagate(await self.get_lads_child("ProgramManager"), server),
         )
 
@@ -1269,6 +1303,12 @@ def main():
     print(server)
     if False:
         fu = server.devices[0].functional_units[0]
+        sm: FunctionalStateMachine = fu.state_machine
+        sm.start_program("MyTemplate", 
+                         pd.DataFrame({"Key": ["Temperature"], "Value": [37.0]}), 
+                         "MyJob", 
+                         "MyTask", 
+                         pd.DataFrame())
         time.sleep(10)
         server.running = False
     # time.sleep(1)

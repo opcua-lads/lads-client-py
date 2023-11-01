@@ -2,9 +2,10 @@ import streamlit as st
 import datetime as dt
 import pandas as pd
 import time, math
+import matplotlib as plt
 import plotly.graph_objects as go
 from typing import Tuple
-from lads_client import  BaseStateMachineFunction, FunctionalStateMachine, LADSNode, create_connection, DefaultServerUrl, remove_none, BaseVariable, AnalogItem, BaseControlFunction, Component, CoverFunction, Server, Device, FunctionalUnit, \
+from lads_client import  BaseStateMachineFunction, LADSNode, create_connection, DefaultServerUrl, remove_none, BaseVariable, AnalogItem, BaseControlFunction, Component, CoverFunction, Server, Device, FunctionalUnit, \
     Function, AnalogControlFunction, AnalogSensorFunction, StartStopControlFunction, MulitModeControlFunction, StateMachine, AnalogControlFunctionWithTotalizer
 from asyncua import ua
 
@@ -220,7 +221,7 @@ def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
                     axis=None, 
                     vmin=eu_range.Low, 
                     vmax=eu_range.High,
-                    cmap="BlGnRd"
+                    cmap="jet"
                 )
 
             with st.expander(f"**{function.display_name}**", expanded=(idx==0)):
@@ -370,42 +371,63 @@ def update_program_template_set(container, functional_unit: FunctionalUnit):
                 show_variables_table(program_template.variables)
 
 def show_active_program(container, functional_unit: FunctionalUnit) -> any:
+    current_state_var = functional_unit.state_machine.current_state
+    st.session_state[current_state_var.nodeid] = "Init"
+
     with container.container():
         st.write("**Active Program**")
-        program_manager = functional_unit.program_manager
-        if not program_manager is None: 
-            with st.form("Start Program"):
-                template_id = st.selectbox("Program template", program_manager.program_template_names)
-                key_value_df = st.data_editor(pd.DataFrame({"Key": [], "Value": []}, dtype="string"),
+    program_manager = functional_unit.program_manager
+    if not program_manager is None: 
+        form_container = empty(st.empty())
+        # print("creating form")
+        with st.form("Start Program"):
+            template_id = st.selectbox("Program template", program_manager.program_template_names)
+            with st.expander("Properties", expanded=False):
+                key_value_df = st.data_editor(pd.DataFrame({"Key": ["My Property"], "Value": ["42.0"]}, dtype="string"),
                                             column_config={"Key": st.column_config.TextColumn(), 
-                                                           "Value": st.column_config.TextColumn()},
+                                                            "Value": st.column_config.TextColumn()},
                                             num_rows="dynamic", hide_index=True, use_container_width=True)
-                job_id = st.text_input("Supervisory job id", value="My Job")
-                task_id = st.text_input("Supervisory task id", value="My Task")
-                samples_df = st.data_editor(pd.DataFrame({"ContainerId": [], "SampleId": [], "Position": [], "CustomData": []}, dtype="string"),
+            job_id = st.text_input("Supervisory job id", value="My Job")
+            task_id = st.text_input("Supervisory task id", value="My Task")
+            with st.expander("Samples", expanded=False):
+                samples_df = st.data_editor(pd.DataFrame({"ContainerId": ["0815", "0815"], "SampleId": ["4711", "4712"], "Position": ["A1", "A2"], "CustomData": ["", ""]}, dtype="string"),
                                             column_config={"ContainerId": st.column_config.TextColumn(), 
-                                                           "SampleId": st.column_config.TextColumn(),
-                                                           "Position": st.column_config.TextColumn(),
-                                                           "CustomData": st.column_config.TextColumn(),
-                                                           },
+                                                            "SampleId": st.column_config.TextColumn(),
+                                                            "Position": st.column_config.TextColumn(),
+                                                            "CustomData": st.column_config.TextColumn(),
+                                                            },
                                             num_rows="dynamic", hide_index=True, use_container_width=True)
-                submitted = st.form_submit_button("Start Program")
-    progress_container = st.empty()
+            submitted = st.form_submit_button("Start Program")
+            if submitted:
+                functional_unit.state_machine.start_program(template_id, key_value_df, job_id, task_id, samples_df)
+
+    progress_container = empty(st.empty())
     update_active_program(progress_container, functional_unit)
     return progress_container
-                        
-def update_active_program(container, functional_unit: FunctionalUnit):
-    with container.container():
-        st.write(f"Current state **{functional_unit.state_machine.current_state.value_str}**")
-        program_manager = functional_unit.program_manager
-        if program_manager is None: 
-            return
-        active_program = program_manager.active_program
-        if active_program.has_progress:
-            st.progress(active_program.current_progress, "Program run progress")
-        if active_program.has_step_progress:
-            st.progress(active_program.current_step_progress, "Program step progress")
-        show_variables_table(active_program.variables)
+
+def update_active_program(progress_container, functional_unit: FunctionalUnit):
+    current_state_var = functional_unit.state_machine.current_state
+    current_state = current_state_var.value_str
+    previous_state = st.session_state[current_state_var.nodeid]
+    st.session_state[current_state_var.nodeid] = current_state
+    state_changed = current_state != previous_state
+    running = "Running" in current_state
+    program_manager = functional_unit.program_manager
+
+    with progress_container.container():
+        if state_changed:
+            # print("updating state")
+            st.write(f"Current state **{current_state}**")
+        if program_manager is not None: 
+            if state_changed or running:
+                # print("updating progress")
+                active_program = program_manager.active_program
+                if active_program.has_progress:
+                    st.progress(active_program.current_progress, "Program run progress")
+                if active_program.has_step_progress:
+                    st.progress(active_program.current_step_progress, "Program step progress")
+                with st.expander("Program run details", expanded=False):
+                    show_variables_table(active_program.variables)
 
 def update_result_set(container, functional_unit: FunctionalUnit):
     with container.container():
@@ -463,10 +485,6 @@ def main():
             with col_functions:
                 container_functions = empty(st.empty())
                 function_containers = show_functions(container_functions, selected_functional_unit)
-                # container_functions = st.empty()
-                # empty(container_functions)
-                # update_functions(container_functions, selected_functional_unit)
-
             # Chart in the detail view
             with col_chart:
                 container_chart = st.empty()
