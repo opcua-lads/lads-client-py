@@ -34,17 +34,29 @@ def format_number(x: float, decis = 1) -> str:
     finally:
         return result
 
-def state_color(function: BaseControlFunction) -> str:
-    s = str(function.current_state.value_str)
+def function_state_color(function: BaseControlFunction) -> str:
+    return state_color(function.current_state)
+
+def state_color(current_state: BaseVariable) -> str:
+    s = str(current_state.value_str)
     return "green" if "Running" in s else "red" if "Abort" in s else "gray"
 
-def call_state_machine_method(function: BaseStateMachineFunction):
+def call_function_state_machine_method(function: BaseStateMachineFunction):
     if function is None: return
     key = function.unique_name
     if not key in st.session_state:
         st.session_state[key] = None
     method_name = st.session_state[key]
     function.state_machine.call_method_by_name(method_name)
+    st.session_state[key] = None
+
+def call_state_machine_method(state_machine: StateMachine):
+    key = state_machine.nodeid
+    if not key in st.session_state:
+        st.session_state[key] = None
+    method_name = st.session_state[key]
+    state_machine.call_method_by_name(method_name)
+    st.session_state[key] = None
 
 def write_variable_value(variable: BaseVariable):
     if variable is None: 
@@ -53,13 +65,14 @@ def write_variable_value(variable: BaseVariable):
     if not key in st.session_state:
         return
     variable.set_value(st.session_state[key])
+    st.session_state[key] = None
 
 def add_variable_value_input(variable: BaseVariable, parent: LADSNode = None):
     if variable.has_write_access:
         help = f"{variable.display_name}: {variable.description.Text}"
         if parent is not None:
             help = f"{parent.display_name}.{help}"
-        st.number_input(variable.display_name, on_change = write_variable_value(variable), value = float(variable.value), key=f"{variable.nodeid}", label_visibility="collapsed", help = help)
+        st.number_input(variable.display_name, on_change = write_variable_value(variable), value=None, placeholder=str(variable.value), key=f"{variable.nodeid}", label_visibility="collapsed", help = help)
 
 def show_functions(container, functional_unit: FunctionalUnit) -> dict:
     with container.container():
@@ -81,7 +94,8 @@ def show_functions(container, functional_unit: FunctionalUnit) -> dict:
                                     add_variable_value_input(controller_parameter.target_value, controller_parameter)
                             method_names = function.state_machine.method_names
                             if len(method_names) > 0:
-                                cmd = st.selectbox("Command", method_names, label_visibility="collapsed", key=function.unique_name, on_change=call_state_machine_method(function))                                
+                                key = function.unique_name
+                                cmd = st.selectbox(label="Command", options=method_names, index=None, label_visibility="collapsed", key=key, on_change=call_function_state_machine_method(function))
                     with col_sp:
                         container_sp = st.empty()
                     with col_pv:
@@ -97,7 +111,7 @@ def update_functions(function_containers: dict):
         sp_col = container_sp.container()
         pv_col = container_pv.container()
         if isinstance(function, AnalogControlFunction):
-            color = state_color(function)
+            color = function_state_color(function)
             with sp_col:
                 st.write(f":{color}[**{format_value(function.target_value.value)}** {function.target_value.eu}]")
                 if isinstance(function, AnalogControlFunctionWithTotalizer):
@@ -114,11 +128,11 @@ def update_functions(function_containers: dict):
                 st.write(f":blue[**{function.current_state.value_str}**]")
         elif isinstance(function, StartStopControlFunction):
             with pv_col: 
-                st.write(f":{state_color(function)}[**{function.current_state.value_str}**]")
+                st.write(f":{function_state_color(function)}[**{function.current_state.value_str}**]")
         elif isinstance(function, MulitModeControlFunction):
             for controller_parameter in function.controller_parameters:
                 with sp_col:
-                    st.write(f":{state_color(function)}[**{format_value(controller_parameter.target_value.value)}** {controller_parameter.target_value.eu}]")
+                    st.write(f":{function_state_color(function)}[**{format_value(controller_parameter.target_value.value)}** {controller_parameter.target_value.eu}]")
                 with pv_col: 
                     st.write(f":blue[**{format_value(controller_parameter.current_value.value)}** {controller_parameter.current_value.eu}]")
         
@@ -237,10 +251,13 @@ def update_events(container, functional_unit: FunctionalUnit):
     events = functional_unit.subscription_handler.events
     if events is None:
         return
+    if lastEventListUpdateKey not in st.session_state:
+        st.session_state[lastEventListUpdateKey] = dt.datetime(2020, 1, 1)    
     last_event_update = functional_unit.subscription_handler.last_event_update
     last_event_list_update = st.session_state[lastEventListUpdateKey]
     if last_event_update == last_event_list_update:
         return
+    
     st.session_state[lastEventListUpdateKey] = last_event_update
     with container:
         with st.container():
@@ -370,6 +387,15 @@ def update_program_template_set(container, functional_unit: FunctionalUnit):
             with st.expander(program_template.display_name, expanded=False):
                 show_variables_table(program_template.variables)
 
+def show_state(container, functional_unit: FunctionalUnit) -> any:
+    return container.empty()
+
+def update_state(container, functional_unit: FunctionalUnit) -> bool:
+    current_state_var = functional_unit.state_machine.current_state
+    with container:
+        st.write(f":{state_color(current_state_var)}[**{current_state_var.value_str}**]")
+    return False
+
 def show_active_program(container, functional_unit: FunctionalUnit) -> any:
     current_state_var = functional_unit.state_machine.current_state
     st.session_state[current_state_var.nodeid] = "Init"
@@ -411,13 +437,11 @@ def update_active_program(progress_container, functional_unit: FunctionalUnit):
     previous_state = st.session_state[current_state_var.nodeid]
     st.session_state[current_state_var.nodeid] = current_state
     state_changed = current_state != previous_state
+
     running = "Running" in current_state
     program_manager = functional_unit.program_manager
 
     with progress_container.container():
-        if state_changed:
-            # print("updating state")
-            st.write(f"Current state **{current_state}**")
         if program_manager is not None: 
             if state_changed or running:
                 # print("updating progress")
@@ -472,7 +496,16 @@ def main():
 
     # title
     st.header("LADS OPC UA Client")
-    st.write(f"**{selected_functional_unit.unique_name}**")
+    
+    with st.expander(f"**{selected_functional_unit.unique_name}**", expanded=True):
+        col_cmd, col_state = st.columns([2, 3])
+        with col_cmd:
+            state_machine = selected_functional_unit.state_machine
+            cmd = st.selectbox("Command", options=["Start", "Stop", "Abort"], index=None, label_visibility="collapsed", key=state_machine.nodeid, on_change=call_state_machine_method(state_machine))
+
+        with col_state:
+            container_state = show_state(col_state, selected_functional_unit)
+            update_state(container_state, selected_functional_unit)
 
     tab_functions, tab_program_manager, tab_device = st.tabs(["Operation", "Program Management", "Asset Management"])
     container_functional_unit = st.empty()
@@ -515,9 +548,9 @@ def main():
             update_events(container_events, selected_functional_unit)
             
         # update loop
-        cf = 0.1
         index = 5
         while(True):
+            update_state(container_state, selected_functional_unit)
             update_functions(function_containers)
             update_events(container_events, selected_functional_unit)
             update_active_program(progress_container, selected_functional_unit)
