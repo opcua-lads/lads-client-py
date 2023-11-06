@@ -5,7 +5,7 @@ import time, math
 import matplotlib as plt
 import plotly.graph_objects as go
 from typing import Tuple
-from lads_client import  BaseStateMachineFunction, LADSNode, create_connection, DefaultServerUrl, remove_none, BaseVariable, AnalogItem, BaseControlFunction, Component, CoverFunction, Server, Device, FunctionalUnit, \
+from lads_client import  BaseStateMachineFunction, LADSNode, MultiStateDiscreteControlFunction, TwoStateDiscreteControlFunction, create_connection, DefaultServerUrl, remove_none, BaseVariable, AnalogItem, BaseFunctionalStateMachineFunction, Component, CoverFunction, Server, Device, FunctionalUnit, \
     Function, AnalogControlFunction, AnalogSensorFunction, StartStopControlFunction, MulitModeControlFunction, StateMachine, AnalogControlFunctionWithTotalizer
 from asyncua import ua
 
@@ -34,7 +34,7 @@ def format_number(x: float, decis = 1) -> str:
     finally:
         return result
 
-def function_state_color(function: BaseControlFunction) -> str:
+def function_state_color(function: BaseFunctionalStateMachineFunction) -> str:
     return state_color(function.current_state)
 
 def state_color(current_state: BaseVariable) -> str:
@@ -120,6 +120,12 @@ def update_functions(function_containers: dict):
                 st.write(f":blue[**{format_value(function.current_value.value)}** {function.current_value.eu}]")
                 if isinstance(function, AnalogControlFunctionWithTotalizer):
                     st.write(f":blue[**{format_value(function.totalized_value.value)}** {function.totalized_value.eu}]")
+        elif isinstance(function, TwoStateDiscreteControlFunction) or isinstance(function, MultiStateDiscreteControlFunction) :
+            color = function_state_color(function)
+            with sp_col:
+                st.write(f":{color}[**{function.target_value.value_str}**]")
+            with pv_col: 
+                st.write(f":blue[**{function.current_value.value_str}**]")
         elif isinstance(function, AnalogSensorFunction):
             with pv_col: 
                 st.write(f":blue[**{format_value(function.sensor_value.value)}** {function.sensor_value.eu}]")
@@ -326,34 +332,54 @@ def show_variables_table(variables: list[BaseVariable], has_description: bool = 
     }
     st.dataframe(data, use_container_width=True, hide_index=True, column_config=column_config)
 
-def update_asset_management(container, device: Device):
-    with container.container():
-        col1, col2 = st.columns([1, 2])
-        with col1:
-            state_vars = device.state_machine_variables + device.location_variables
-            with st.expander(f"**Overview {device.display_name}**", expanded=True):  
-                show_variables_table(state_vars)
-        with col2:
-            lat = []
-            lon = []
-            size = []
-            color = []
-            for dev in device.server.devices:
-                location = dev.geographical_location
-                if location is not None:
-                    lat.append(location[0])
-                    lon.append(location[1])
-                    size.append(1000 if dev == device else 500)
-                    color.append("#ff4400" if dev is device else "#0044ff")
-            if len(lat) > 0:
-                df = pd.DataFrame({
-                    "lat": lat,
-                    "lon": lon,
-                    "size": size,
-                    "color": color,
-                    })
-                st.map(df, zoom=6, use_container_width=True)
+def show_asset_management(container, device: Device):
+    device_state_machine = device.state_machine
+    device_state_methods = device_state_machine.method_names
+    operation_mode_state_machine = device.machinery_operation_mode
+    operation_mode_methods = [] if operation_mode_state_machine is None else operation_mode_state_machine.method_names
 
+    with container.container():
+        col_device, col_map = st.columns([1, 2])
+        with col_device:
+            if len(device_state_methods) > 0:
+                device_method = st.selectbox(label="Device control", options=device_state_methods, index=None, key=device_state_machine.nodeid, on_change=call_state_machine_method(device_state_machine))
+            if len(operation_mode_methods) > 0:
+                operation_mode_method = st.selectbox(label="Operation mode", options=operation_mode_methods, index=None, key=operation_mode_state_machine.nodeid, on_change=call_state_machine_method(operation_mode_state_machine))
+            state_vars = device.state_machine_variables + device.location_variables
+            container_device = st.empty()
+        with col_map:
+            container_map = st.empty()
+        container_components = st.empty()
+
+    update_asset_management(container_device, container_map, container_components, device)
+    return container_device, container_map, container_components
+
+def update_asset_management(container_device, container_map, container_components, device: Device):
+    with container_device:
+        state_vars = device.state_machine_variables + device.location_variables
+        with st.expander(f"**Status {device.display_name}**", expanded=True):  
+            show_variables_table(state_vars)
+    with container_map:
+        lat = []
+        lon = []
+        size = []
+        color = []
+        for dev in device.server.devices:
+            location = dev.geographical_location
+            if location is not None:
+                lat.append(location[0])
+                lon.append(location[1])
+                size.append(1000 if dev == device else 500)
+                color.append("#ff4400" if dev is device else "#0044ff")
+        if len(lat) > 0:
+            df = pd.DataFrame({
+                "lat": lat,
+                "lon": lon,
+                "size": size,
+                "color": color,
+                })
+            st.map(df, zoom=6, use_container_width=True)
+    with container_components.container():
         show_components(device, expanded_count=1)
 
 def show_components(component: Component, expanded_count):
@@ -388,7 +414,9 @@ def update_program_template_set(container, functional_unit: FunctionalUnit):
                 show_variables_table(program_template.variables)
 
 def show_state(container, functional_unit: FunctionalUnit) -> any:
-    return container.empty()
+    container_state = container.empty()
+    update_state(container_state, functional_unit)
+    return container_state
 
 def update_state(container, functional_unit: FunctionalUnit) -> bool:
     current_state_var = functional_unit.state_machine.current_state
@@ -448,8 +476,12 @@ def update_active_program(progress_container, functional_unit: FunctionalUnit):
                 active_program = program_manager.active_program
                 if active_program.has_progress:
                     st.progress(active_program.current_progress, "Program run progress")
+                    st.write(f"{0.001 * float(active_program.current_runtime.value)}s / {0.001 * float(active_program.estimated_runtime.value)}s")
                 if active_program.has_step_progress:
-                    st.progress(active_program.current_step_progress, "Program step progress")
+                    step_name = active_program.current_step_name
+                    label = "Program step progress" if step_name is None else f"Program step '{step_name.value_str}' progress" 
+                    st.progress(active_program.current_step_progress, text=label)
+                    st.write(f"{0.001 * float(active_program.current_step_runtime.value)}s / {0.001 * float(active_program.estimated_step_runtime.value)}s")
                 with st.expander("Program run details", expanded=False):
                     show_variables_table(active_program.variables)
 
@@ -495,17 +527,16 @@ def main():
             selected_functional_unit = functional_unit
 
     # title
-    st.header("LADS OPC UA Client")
+    st.subheader("LADS OPC UA Client")
     
     with st.expander(f"**{selected_functional_unit.unique_name}**", expanded=True):
         col_cmd, col_state = st.columns([2, 3])
         with col_cmd:
             state_machine = selected_functional_unit.state_machine
-            cmd = st.selectbox("Command", options=["Start", "Stop", "Abort"], index=None, label_visibility="collapsed", key=state_machine.nodeid, on_change=call_state_machine_method(state_machine))
-
+            methods = list(filter(lambda method: method != "StartProgram", state_machine.method_names ))
+            cmd = st.selectbox("Command", options=methods, index=None, label_visibility="collapsed", key=state_machine.nodeid, on_change=call_state_machine_method(state_machine))
         with col_state:
             container_state = show_state(col_state, selected_functional_unit)
-            update_state(container_state, selected_functional_unit)
 
     tab_functions, tab_program_manager, tab_device = st.tabs(["Operation", "Program Management", "Asset Management"])
     container_functional_unit = st.empty()
@@ -516,8 +547,7 @@ def main():
 
             # Functions list in the detail view
             with col_functions:
-                container_functions = empty(st.empty())
-                function_containers = show_functions(container_functions, selected_functional_unit)
+                function_containers = show_functions(empty(st.empty()), selected_functional_unit)
             # Chart in the detail view
             with col_chart:
                 container_chart = st.empty()
@@ -528,16 +558,13 @@ def main():
                 container_templates = empty(st.empty())
                 update_program_template_set(container_templates, selected_functional_unit)
             with col_status:
-                container_active_program = empty(st.empty())
-                progress_container = show_active_program(container_active_program, selected_functional_unit)
+                progress_container = show_active_program(empty(st.empty()), selected_functional_unit)
             with col_results:
                 container_results = empty(st.empty())
                 update_result_set(container_results, selected_functional_unit)
 
         with tab_device:
-            container_device = st.empty()
-            empty(container_device)
-            update_asset_management(container_device, selected_functional_unit.device)
+            container_device, container_map, container_components = show_asset_management(empty(st.empty()), selected_functional_unit.device)
 
         # Display the events table
         with st.container():
@@ -554,7 +581,7 @@ def main():
             update_functions(function_containers)
             update_events(container_events, selected_functional_unit)
             update_active_program(progress_container, selected_functional_unit)
-            update_asset_management(container_device, selected_functional_unit.device)
+            update_asset_management(container_device, container_map, container_components, selected_functional_unit.device)
             index += 1
             if index >= 5:
                 index = 0

@@ -36,6 +36,8 @@ class LADSObjectIds(IntEnum):
     AnalogArraySensorFunctionType = 1015
     AnalogControlFunctionType = 1009
     AnalogControlFunctionWithTotalizerType = 1014
+    TwoStateDiscreteControlFunctionType = 1042
+    MultiStateDiscreteControlFunctionType = 1045
     MulitModeControlFunctionType = 1047
     ControllerParameterType = 1048
     ControllerParameterSetType = 1049
@@ -76,6 +78,7 @@ class Server():
         self.FiniteStateMachineType = self.client.get_node(ua.ObjectIds.FiniteStateMachineType)
         self.BaseVariableType = self.client.get_node(ua.ObjectIds.BaseVariableType)
         self.AnalogItemType = self.client.get_node(ua.ObjectIds.AnalogItemType)
+        self.TwoStateDiscreteType = self.client.get_node(ua.ObjectIds.TwoStateDiscreteType)
         self.MultiStateDiscreteType = self.client.get_node(ua.ObjectIds.MultiStateDiscreteType)
         self.LifetimeVariableType = self.get_di_node(DIObjectIds.LifetimeVariableType)
         self.MachineryOperationCounterType = self.get_machinery_node(MachineryObjectIds.MachineryOperationCounterType)
@@ -91,6 +94,8 @@ class Server():
         self.AnalogArraySensorFunctionType = self.get_lads_node(LADSObjectIds.AnalogArraySensorFunctionType)
         self.AnalogControlFunctionType = self.get_lads_node(LADSObjectIds.AnalogControlFunctionType)
         self.AnalogControlFunctionWithTotalizerType = self.get_lads_node(LADSObjectIds.AnalogControlFunctionWithTotalizerType)
+        self.TwoStateDiscreteControlFunctionType = self.get_lads_node(LADSObjectIds.TwoStateDiscreteControlFunctionType)
+        self.MultiStateDiscreteControlFunctionType = self.get_lads_node(LADSObjectIds.MultiStateDiscreteControlFunctionType)
         self.MultiModeControlFunctionType = self.get_lads_node(LADSObjectIds.MulitModeControlFunctionType)
         self.ControllerParameterType = self.get_lads_node(LADSObjectIds.ControllerParameterType)
         self.ControllerParameterSetType = self.get_lads_node(LADSObjectIds.ControllerParameterSetType)
@@ -194,7 +199,6 @@ class SubscriptionHandler(object):
             self.subscription = await server.client.create_subscription(period, self)
         self.subscribed_variables = dict((node.nodeid, node) for node in nodes)
         result = await self.subscription.subscribe_data_change(nodes) 
-        print(result)
         return result
  
     async def subscribe_events(self, server: Server, node: Node, period: float = 500):
@@ -208,8 +212,7 @@ class SubscriptionHandler(object):
             variable: Node = self.subscribed_variables[node.nodeid]
             variable.data_change_notification(data)
         except Exception as error:
-            print(f"datachange_notification error {error}")
-        # print(f"{variable.display_name} = {val}")
+            _logger.error(f"datachange_notification error {error}")
 
     def event_notification(self, event: Event):
         fields_dict = event.get_event_props_as_fields_dict()
@@ -217,7 +220,7 @@ class SubscriptionHandler(object):
         try:
             event_fields = {k: variant_value_to_str(v) for k, v in fields_dict.items()}
         except Exception as error:
-            print(error)
+            _logger.error(error)
         key = pd.to_datetime(dt.datetime.now())
         if self.events is None:
             self.events = pd.DataFrame(event_fields, index = [key])
@@ -248,11 +251,11 @@ class LADSNode(Node):
     async def finalize_init(self):
         pass
 
-    def datachange_notification(self, node: Node, val: Any, data: DataChangeNotif):
-        print("New data change event", node, val)
+    #def datachange_notification(self, node: Node, val: Any, data: DataChangeNotif):
+    #    pass
 
-    def event_notification(self, event):
-        print("New event", event)
+    #def event_notification(self, event):
+    #    print("New event", event)
 
     @property
     def display_name(self) -> str:
@@ -327,7 +330,7 @@ class LADSNode(Node):
         try:
             return await self.call_method(ua.QualifiedName(name, self.server.ns_LADS), *args)
         except Exception as error:
-            print(error)
+            _logger.error(error)
             return ua.StatusCodes.BadNotImplemented
         
 class Method(LADSNode):
@@ -474,6 +477,29 @@ class AnalogItem(SubscribedVariable):
                 result = self.engineering_units.DisplayName.Text
         return result
 
+class TwoStateDiscrete(SubscribedVariable):
+    true_state: BaseVariable
+    false_state: BaseVariable
+
+    @classmethod
+    async def propagate(cls, node: Node, server: Server) -> Self:
+        return await propagate_to(TwoStateDiscrete, node, server.TwoStateDiscreteType, server)
+
+    def __str__(self):
+        return f"{super().__str__()}\n  TrueState: {self.true_state.value_str}\n  FalseState: {self.false_state.value_str}"
+    
+    async def init(self, server: Server):
+        await super().init(server)
+        self.true_state = await BaseVariable.propagate(await self.get_child("TrueState"), server)
+        self.false_state = await BaseVariable.propagate(await self.get_child("FalseState"), server)
+
+    @property
+    def value_str(self) -> str:
+        if bool(self.value):
+            return self.true_state.value_str
+        else:
+            return self.false_state.value_str
+    
 class MultiStateDiscrete(SubscribedVariable):
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
@@ -607,12 +633,13 @@ class LADSSet(LADSNode):
     async def init(self, server: Server):
         await super().init(server)
         try:
+            # node_vesion variable is optional
             node_version = await self.get_child("NodeVersion")
-            self.node_version = await NodeVersionVariable.propagate(node_version, server)
-            self.node_version.set = self
+            if node_version is not None:
+                self.node_version = await NodeVersionVariable.propagate(node_version, server)
+                self.node_version.set = self
         except Exception as error:
-            print(error)
-            # self.node_version = None
+            _logger.warning("LADSSet", error)
         finally:
             self.children = await self.get_child_objects()
 
@@ -649,7 +676,6 @@ class LADSSet(LADSNode):
                 assert(len(nodes) == 1)
                 node = await self.propagate_child(nodes[0])
                 self.children.append(node)
-                print(f"added new {node.__class__.__name__} {node.display_name}")
         if len(deleted_node_ids) > 0:
             for node_id in deleted_node_ids:
                 nodes = list(filter(lambda node: node.nodeid == node_id, previous_nodes))
@@ -830,25 +856,31 @@ class FunctionSet(LADSSet):
     async def propagate_to_function(self, node: Node) -> Function:
         server = self.server
         types = await browse_types(server, node)
-        function: Function = None
-        if server.AnalogControlFunctionWithTotalizerType in types:
-            function = await AnalogControlFunctionWithTotalizer.propagate(node, server)
-        elif server.AnalogControlFunctionType in types:
-            function = await AnalogControlFunction.propagate(node, server)
-        elif server.AnalogSensorFunctionType in types:
-            function = await AnalogSensorFunction.propagate(node, server)
-        elif server.AnalogArraySensorFunctionType in types:
-            function = await AnalogArraySensorFunction.propagate(node, server)
-        elif server.CoverFunctionType in types:
-            function = await CoverFunction.propagate(node, server)
-        elif server.StartStopControlFunctionType in types:
-            function = await StartStopControlFunction.propagate(node, server)
-        elif server.MultiModeControlFunctionType in types:
-            function = await MulitModeControlFunction.propagate(node, server)
-        else:
-            function = await Function.propagate(node, server)
+        try:
+            function: Function = None
+            if server.AnalogControlFunctionWithTotalizerType in types:
+                function = await AnalogControlFunctionWithTotalizer.propagate(node, server)
+            elif server.AnalogControlFunctionType in types:
+                function = await AnalogControlFunction.propagate(node, server)
+            elif server.AnalogSensorFunctionType in types:
+                function = await AnalogSensorFunction.propagate(node, server)
+            elif server.AnalogArraySensorFunctionType in types:
+                function = await AnalogArraySensorFunction.propagate(node, server)
+            elif server.CoverFunctionType in types:
+                function = await CoverFunction.propagate(node, server)
+            elif server.StartStopControlFunctionType in types:
+                function = await StartStopControlFunction.propagate(node, server)
+            elif server.TwoStateDiscreteControlFunctionType in types:
+                function = await TwoStateDiscreteControlFunction.propagate(node, server)
+            elif server.MultiStateDiscreteControlFunctionType in types:
+                function = await MultiStateDiscreteControlFunction.propagate(node, server)
+            elif server.MultiModeControlFunctionType in types:
+                function = await MulitModeControlFunction.propagate(node, server)
+            else:
+                function = await Function.propagate(node, server)
+        except Exception as error:
+            _logger.error(error)
         return function
-
 
     @property
     def all_variables(self) -> list[BaseVariable]:        
@@ -886,6 +918,7 @@ class Result(LADSNode):
         return self._variables
 
 class ActiveProgram(LADSNode):
+    current_program_template: BaseVariable
     current_runtime: BaseVariable
     current_pause_time: BaseVariable
     current_step_name: BaseVariable
@@ -895,7 +928,6 @@ class ActiveProgram(LADSNode):
     estimated_step_numbers: BaseVariable
     estimated_step_runtime: BaseVariable
     device_program_run_id: BaseVariable
-    program_template: ProgramTemplate
     _variables: list[BaseVariable]
 
     @classmethod
@@ -914,6 +946,7 @@ class ActiveProgram(LADSNode):
         self._variables.sort(key = lambda variable: variable.display_name)
         for variable in self._variables:
             variable.subscription_level = SubscriptionLevel.Temporary
+        self.current_program_template = self.find_variable("CurrentProgramTemplate")
         self.current_runtime = self.find_variable("CurrentRuntime")
         self.current_pause_time = self.find_variable("CurrentPauseTime")
         self.current_step_name = self.find_variable("CurrentStepName")
@@ -946,7 +979,7 @@ class ActiveProgram(LADSNode):
     @property
     def current_step_progress(self) -> float:
         try:
-            return self.current_step_runtime.value / self.estimated__step_runtime.value
+            return self.current_step_runtime.value / self.estimated_step_runtime.value
         except:
             return 0.0
 
@@ -1018,7 +1051,7 @@ class FunctionalUnit(LADSNode):
             # debug- check for none
             for variable in function_variables:
                 if variable is None:
-                    print(f"None variable detected in function {self.unique_name}")
+                    _logger.error(f"None variable detected in function {self.unique_name}")
             child_vars = list(filter(lambda variable: variable.subscription_level > SubscriptionLevel.Never, function_variables))
             variables = variables + child_vars
         if self.program_manager is not None:
@@ -1097,13 +1130,13 @@ class BaseStateMachineFunction(Function):
     def current_state(self) -> BaseVariable:
         return self.state_machine.current_state
 
-class BaseControlFunction(BaseStateMachineFunction):
+class BaseFunctionalStateMachineFunction(BaseStateMachineFunction):
     async def init(self, server: Server):
         await super().init(server)
         if self.state_machine:        
             self.state_machine = await FunctionalStateMachine.propagate(self.state_machine, server)
 
-class StartStopControlFunction(BaseControlFunction):#
+class StartStopControlFunction(BaseFunctionalStateMachineFunction):#
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
         return await propagate_to(StartStopControlFunction, node, server.StartStopControlFunctionType, server)
@@ -1129,22 +1162,23 @@ class AnalogArraySensorFunction(AnalogSensorFunction):
     async def propagate(cls, node: Node, server: Server) -> Self:
         return await propagate_to(AnalogArraySensorFunction, node, server.AnalogArraySensorFunctionType, server)
 
+class BaseControlFunction(BaseFunctionalStateMachineFunction):
+    def __str__(self):
+        return f"{super().__str__()}\n  {self.current_value}\n  {self.target_value}"
+    
+    @property
+    def variables(self) ->list[BaseVariable]:
+        return super().variables + [self.current_value, self.target_value]
+    
 class AnalogControlFunction(BaseControlFunction):
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
         return await propagate_to(AnalogControlFunction, node, server.AnalogControlFunctionType, server)
 
-    def __str__(self):
-        return f"{super().__str__()}\n  {self.current_value}\n  {self.target_value}"
-    
     async def init(self, server: Server):
         await super().init(server)        
         self.current_value = await get_lads_analog_item(self, "CurrentValue")
         self.target_value = await get_lads_analog_item(self, "TargetValue")
-
-    @property
-    def variables(self) ->list[BaseVariable]:
-        return super().variables + [self.current_value, self.target_value]
 
 class AnalogControlFunctionWithTotalizer(AnalogControlFunction):
     @classmethod
@@ -1161,6 +1195,26 @@ class AnalogControlFunctionWithTotalizer(AnalogControlFunction):
     @property
     def variables(self) ->list[BaseVariable]:
         return super().variables + [self.totalized_value]
+
+class TwoStateDiscreteControlFunction(BaseControlFunction):
+    @classmethod
+    async def propagate(cls, node: Node, server: Server) -> Self:
+        return await propagate_to(TwoStateDiscreteControlFunction, node, server.TwoStateDiscreteControlFunctionType, server)
+
+    async def init(self, server: Server):
+        await super().init(server)        
+        self.current_value = await get_lads_two_state_discrete(self, "CurrentValue")
+        self.target_value = await get_lads_two_state_discrete(self, "TargetValue")
+
+class MultiStateDiscreteControlFunction(BaseControlFunction):
+    @classmethod
+    async def propagate(cls, node: Node, server: Server) -> Self:
+        return await propagate_to(MultiStateDiscreteControlFunction, node, server.MultiStateDiscreteControlFunctionType, server)
+
+    async def init(self, server: Server):
+        await super().init(server)        
+        self.current_value = await get_lads_two_state_discrete(self, "CurrentValue")
+        self.target_value = await get_lads_two_state_discrete(self, "TargetValue")
 
 class ControllerParameter(LADSNode):
     @classmethod
@@ -1189,7 +1243,7 @@ class ControllerParameterSet(LADSSet):
         self.controller_parameters: list[ControllerParameter] = await asyncio.gather(*(ControllerParameter.propagate(child, server) for child in self.children))
         self.controller_parameters.sort(key = lambda node: node.display_name)
 
-class MulitModeControlFunction(BaseControlFunction):
+class MulitModeControlFunction(BaseFunctionalStateMachineFunction):
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
         return await propagate_to(MulitModeControlFunction, node, server.MultiModeControlFunctionType, server)
@@ -1226,7 +1280,7 @@ async def propagate_to(cls: Type, node: Node, type_node: Node, server: Server) -
     if node is None: return None
     node_class = await node.read_node_class()
     if node_class != ua.NodeClass.Method:
-        assert await is_of_type(server, node, type_node)
+        assert await is_of_type(server, node, type_node), f"node {node.nodeid} is expexted to be of type {type_node.nodeid}"
     node.__class__ = cls
     propagated_node : cls = node
     await propagated_node.init(server)
@@ -1235,6 +1289,14 @@ async def propagate_to(cls: Type, node: Node, type_node: Node, server: Server) -
 async def get_lads_analog_item(parent: LADSNode, name: str) -> AnalogItem:
     node = await parent.get_lads_child(name)
     return await AnalogItem.propagate(node, parent.server)
+
+async def get_lads_two_state_discrete(parent: LADSNode, name: str) -> TwoStateDiscrete:
+    node = await parent.get_lads_child(name)
+    return await TwoStateDiscrete.propagate(node, parent.server)
+
+async def get_lads_multi_state_discrete(parent: LADSNode, name: str) -> MultiStateDiscrete:
+    node = await parent.get_lads_child(name)
+    return await MultiStateDiscrete.propagate(node, parent.server)
 
 async def get_di_variable(parent: LADSNode, name: str) -> BaseVariable:
     return await BaseVariable.propagate(await parent.get_di_child(name), parent.server)
@@ -1269,7 +1331,7 @@ async def run_connection_async(client: Client, server: Server):
             _logger.error(error)
             await asyncio.sleep(2)
     await client.disconnect()
-    print("disconnected")
+    _logger.warning("disconnected")
 
 import threading
 
@@ -1287,7 +1349,7 @@ def create_connection(url = "opc.tcp://localhost:26543") -> Server:
     t.start()
     while not server.initialized:
         time.sleep(0.1)
-    if False:
+    if True:
         for device in server.devices:
             print (device)
             for component in device.components:
@@ -1300,7 +1362,7 @@ def create_connection(url = "opc.tcp://localhost:26543") -> Server:
 
 def main():
     server = create_connection()
-    print(server)
+    _logger.log(server)
     if False:
         fu = server.devices[0].functional_units[0]
         sm: FunctionalStateMachine = fu.state_machine
@@ -1313,7 +1375,7 @@ def main():
         server.running = False
     # time.sleep(1)
     while True:
-        print("ping")
+        _logger.log("ping")
         time.sleep(1)
 
 if __name__ == "__main__":
