@@ -1,2 +1,3 @@
 # lads-client-py
-Pythonic LADS OPC UA client with optional streamline based GUI
+Pythonic LADS OPC UA client with optional streamlit based GUI
+
