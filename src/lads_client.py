@@ -28,6 +28,7 @@ class LADSObjectIds(IntEnum):
     DeviceType = 1002
     ComponentSetType = 1025
     ComponentType = 1024
+    SetType = 61
     FunctionalUnitSetType = 1023
     FunctionalUnitType= 1003
     FunctionSetType = 1026
@@ -43,6 +44,12 @@ class LADSObjectIds(IntEnum):
     ControllerParameterSetType = 1049
     StartStopControlFunctionType = 1032
     CoverFunctionType = 1011
+    ProgramManagerType = 1006
+    ProgramTemplateSetType = 1019
+    ProgramTemplateType = 1018
+    ActiveProgramType = 1040
+    ResultSetType = 1020
+    ResultType = 1021
 
 class MachineryObjectIds(IntEnum):
     MachineryOperationCounterType = 1009
@@ -84,6 +91,7 @@ class Server():
         self.MachineryOperationCounterType = self.get_machinery_node(MachineryObjectIds.MachineryOperationCounterType)
         self.MachineryLifeTimeCounterType = self.get_machinery_node(MachineryObjectIds.MachineryLifeTimeCounterType)
         self.DeviceType = self.get_lads_node(LADSObjectIds.DeviceType)
+        self.SetType = self.get_lads_node(LADSObjectIds.SetType)
         self.ComponentSetType = self.get_lads_node(LADSObjectIds.ComponentSetType)
         self.ComponentType = self.get_lads_node(LADSObjectIds.ComponentType)
         self.FunctionalUnitSetType = self.get_lads_node(LADSObjectIds.FunctionalUnitSetType)
@@ -101,6 +109,12 @@ class Server():
         self.ControllerParameterSetType = self.get_lads_node(LADSObjectIds.ControllerParameterSetType)
         self.StartStopControlFunctionType = self.get_lads_node(LADSObjectIds.StartStopControlFunctionType)
         self.CoverFunctionType = self.get_lads_node(LADSObjectIds.CoverFunctionType)
+        self.ProgramManagerType = self.get_lads_node(LADSObjectIds.ProgramManagerType)
+        self.ProgramTemplateSetType = self.get_lads_node(LADSObjectIds.ProgramTemplateSetType)
+        self.ProgramTemplateType = self.get_lads_node(LADSObjectIds.ProgramTemplateType)
+        self.ActiveProgramType = self.get_lads_node(LADSObjectIds.ActiveProgramType)
+        self.ResultSetType = self.get_lads_node(LADSObjectIds.ResultSetType)
+        self.ResultType = self.get_lads_node(LADSObjectIds.ResultType)
 
         # read data tyoes
         self.data_types = await self.client.load_data_type_definitions()
@@ -623,7 +637,7 @@ class FunctionalStateMachine(StateMachine):
 class LADSSet(LADSNode):
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(LADSSet, node, server.BaseObjectType, server)
+        return await propagate_to(LADSSet, node, server.SetType, server)
     
     node_version: NodeVersionVariable
     children: list[Node] = []
@@ -683,6 +697,12 @@ class LADSSet(LADSNode):
                 node = nodes[0]
                 self.children.remove(node)
         
+class ComponentSet(LADSSet):
+    # since the Machinery type Components is not derived from LADS.SetType with meed a different type check
+    @classmethod
+    async def propagate(cls, node: Node, server: Server) -> Self:
+        return await propagate_to(ComponentSet, node, server.ComponentSetType, server)
+    
 class OperationCounters(LADSNode):
     operation_cycle_counter: BaseVariable
     operation_duration: BaseVariable
@@ -734,7 +754,7 @@ class Component(LADSNode):
         await super().init(server)
         self._variables = await get_properties_and_variables(self)
         self._variables.sort(key = lambda variable: variable.display_name)
-        self.component_set = await LADSSet.propagate(await self.get_machinery_child("Components"), server)
+        self.component_set = await ComponentSet.propagate(await self.get_machinery_child("Components"), server)
         if self.component_set is not None:
             await self.component_set.propagate_children(Component, server.ComponentType, server.ComponentSetType)
         self.operation_counters = await OperationCounters.propagate(await self.get_di_child("OperationCounters"), server)
@@ -850,34 +870,34 @@ class FunctionSet(LADSSet):
     
     async def init(self, server: Server):
         await super().init(server)
-        self.functions: list[Function] = await asyncio.gather(*(self.propagate_to_function(child) for child in self.children))
+        self.functions: list[Function] = await asyncio.gather(*(self.propagate_child(child) for child in self.children))
         self.functions.sort(key = lambda function: function.display_name)
-    
-    async def propagate_to_function(self, node: Node) -> Function:
+
+    async def propagate_child(self, child: Node) -> Function:
         server = self.server
-        types = await browse_types(server, node)
+        types = await browse_types(server, child)
         try:
             function: Function = None
             if server.AnalogControlFunctionWithTotalizerType in types:
-                function = await AnalogControlFunctionWithTotalizer.propagate(node, server)
+                function = await AnalogControlFunctionWithTotalizer.propagate(child, server)
             elif server.AnalogControlFunctionType in types:
-                function = await AnalogControlFunction.propagate(node, server)
+                function = await AnalogControlFunction.propagate(child, server)
             elif server.AnalogSensorFunctionType in types:
-                function = await AnalogSensorFunction.propagate(node, server)
+                function = await AnalogSensorFunction.propagate(child, server)
             elif server.AnalogArraySensorFunctionType in types:
-                function = await AnalogArraySensorFunction.propagate(node, server)
+                function = await AnalogArraySensorFunction.propagate(child, server)
             elif server.CoverFunctionType in types:
-                function = await CoverFunction.propagate(node, server)
+                function = await CoverFunction.propagate(child, server)
             elif server.StartStopControlFunctionType in types:
-                function = await StartStopControlFunction.propagate(node, server)
+                function = await StartStopControlFunction.propagate(child, server)
             elif server.TwoStateDiscreteControlFunctionType in types:
-                function = await TwoStateDiscreteControlFunction.propagate(node, server)
+                function = await TwoStateDiscreteControlFunction.propagate(child, server)
             elif server.MultiStateDiscreteControlFunctionType in types:
-                function = await MultiStateDiscreteControlFunction.propagate(node, server)
+                function = await MultiStateDiscreteControlFunction.propagate(child, server)
             elif server.MultiModeControlFunctionType in types:
-                function = await MulitModeControlFunction.propagate(node, server)
+                function = await MulitModeControlFunction.propagate(child, server)
             else:
-                function = await Function.propagate(node, server)
+                function = await Function.propagate(child, server)
         except Exception as error:
             _logger.error(error)
         return function
@@ -892,7 +912,7 @@ class FunctionSet(LADSSet):
 class ProgramTemplate(LADSNode):
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(ProgramTemplate, node, server.BaseObjectType, server)
+        return await propagate_to(ProgramTemplate, node, server.ProgramTemplateType, server)
 
     async def init(self, server: Server):
         await super().init(server)
@@ -906,7 +926,7 @@ class ProgramTemplate(LADSNode):
 class Result(LADSNode):
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(Result, node, server.BaseObjectType, server)
+        return await propagate_to(Result, node, server.ResultType, server)
 
     async def init(self, server: Server):
         await super().init(server)
@@ -932,7 +952,7 @@ class ActiveProgram(LADSNode):
 
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(ActiveProgram, node, server.BaseObjectType, server)
+        return await propagate_to(ActiveProgram, node, server.ActiveProgramType, server)
 
     def find_variable(self, name: str) -> BaseVariable:
         if self._variables is None:
@@ -990,14 +1010,14 @@ class ProgramManager(LADSNode):
 
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(ProgramManager, node, server.BaseObjectType, server)
+        return await propagate_to(ProgramManager, node, server.ProgramManagerType, server)
 
     async def init(self, server: Server):
         await super().init(server)
         self.program_template_set = await LADSSet.propagate(await self.get_lads_child("ProgramTemplateSet"), server)
         self.result_set = await LADSSet.propagate(await self.get_lads_child("ResultSet"), server)
-        await self.program_template_set.propagate_children(ProgramTemplate, server.BaseObjectType, server.BaseObjectType)
-        await self.result_set.propagate_children(Result, server.BaseObjectType, server.BaseObjectType)
+        await self.program_template_set.propagate_children(ProgramTemplate, server.ProgramTemplateType, server.ProgramTemplateSetType)
+        await self.result_set.propagate_children(Result, server.ResultType, server.ResultSetType)
         self.active_program = await ActiveProgram.propagate(await self.get_lads_child("ActiveProgram"), server)
 
     @property
@@ -1362,7 +1382,7 @@ def create_connection(url = "opc.tcp://localhost:26543") -> Server:
 
 def main():
     server = create_connection()
-    _logger.log(server)
+    _logger.info(f"Connected to {server}")
     if False:
         fu = server.devices[0].functional_units[0]
         sm: FunctionalStateMachine = fu.state_machine
@@ -1375,7 +1395,7 @@ def main():
         server.running = False
     # time.sleep(1)
     while True:
-        _logger.log("ping")
+        _logger.info("ping")
         time.sleep(1)
 
 if __name__ == "__main__":
