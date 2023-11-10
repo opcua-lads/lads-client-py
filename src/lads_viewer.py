@@ -5,8 +5,8 @@ import time, math
 import matplotlib as plt
 import plotly.graph_objects as go
 from typing import Tuple
-from lads_client import  BaseStateMachineFunction, LADSNode, MultiStateDiscreteControlFunction, TwoStateDiscreteControlFunction, create_connection, DefaultServerUrl, remove_none, BaseVariable, AnalogItem, BaseFunctionalStateMachineFunction, Component, CoverFunction, Server, Device, FunctionalUnit, \
-    Function, AnalogControlFunction, AnalogSensorFunction, StartStopControlFunction, MulitModeControlFunction, StateMachine, AnalogControlFunctionWithTotalizer
+from lads_client import  BaseStateMachineFunction, LADSNode, MultiStateDiscreteControlFunction, MultiStateDiscreteSensorFunction, TimerControlFunction, TwoStateDiscreteControlFunction, TwoStateDiscreteSensorFunction, create_connection, DefaultServerUrl, BaseVariable, AnalogItem, BaseFunctionalStateMachineFunction, Component, CoverFunction, Server, Device, FunctionalUnit, \
+    Function, AnalogControlFunction, AnalogScalarSensorFunction, StartStopControlFunction, MulitModeControlFunction, StateMachine, AnalogControlFunctionWithTotalizer
 from asyncua import ua
 
 st.set_page_config(page_title="LADS OPC UA Client", layout="wide")
@@ -68,11 +68,13 @@ def write_variable_value(variable: BaseVariable):
     st.session_state[key] = None
 
 def add_variable_value_input(variable: BaseVariable, parent: LADSNode = None):
+    if variable is None:
+        return
     if variable.has_write_access:
         help = f"{variable.display_name}: {variable.description.Text}"
         if parent is not None:
             help = f"{parent.display_name}.{help}"
-        st.number_input(variable.display_name, on_change = write_variable_value(variable), value=None, placeholder=str(variable.value), key=f"{variable.nodeid}", label_visibility="collapsed", help = help)
+        st.number_input(variable.display_name, on_change = write_variable_value(variable), value=None, placeholder=str(variable.value), key=variable.nodeid, label_visibility="collapsed", help = help)
 
 def show_functions(container, functional_unit: FunctionalUnit) -> dict:
     with container.container():
@@ -92,10 +94,12 @@ def show_functions(container, functional_unit: FunctionalUnit) -> dict:
                             elif isinstance(function, MulitModeControlFunction):
                                 for controller_parameter in function.controller_parameters:
                                     add_variable_value_input(controller_parameter.target_value, controller_parameter)
+                                current_mode = function.current_mode
+                                mode = st.selectbox(label=current_mode.display_name, on_change=write_variable_value(current_mode), options=function.modes, label_visibility="collapsed", key=current_mode.nodeid, placeholder="Choose a mode")
                             method_names = function.state_machine.method_names
                             if len(method_names) > 0:
                                 key = function.unique_name
-                                cmd = st.selectbox(label="Command", options=method_names, index=None, label_visibility="collapsed", key=key, on_change=call_function_state_machine_method(function))
+                                cmd = st.selectbox(label="Command", options=method_names, index=None, label_visibility="collapsed", key=key, on_change=call_function_state_machine_method(function), placeholder="Choose a command")
                     with col_sp:
                         container_sp = st.empty()
                     with col_pv:
@@ -110,7 +114,17 @@ def update_functions(function_containers: dict):
         container_sp, container_pv = containers
         sp_col = container_sp.container()
         pv_col = container_pv.container()
-        if isinstance(function, AnalogControlFunction):
+        if isinstance(function, TimerControlFunction):
+            color = function_state_color(function)
+            with sp_col:
+                if function.target_value is not None:
+                    st.write(f":{color}[**{format_value(0.001 * function.target_value.value)}** s]")
+            with pv_col: 
+                if function.current_value is not None:
+                    st.write(f":blue[**{format_value(0.001 * function.current_value.value)}** s]")
+                if function.difference_value is not None:
+                    st.write(f":blue[**{format_value(0.001 * function.difference_value.value)}** s]")
+        elif isinstance(function, AnalogControlFunction):
             color = function_state_color(function)
             with sp_col:
                 st.write(f":{color}[**{format_value(function.target_value.value)}** {function.target_value.eu}]")
@@ -126,9 +140,12 @@ def update_functions(function_containers: dict):
                 st.write(f":{color}[**{function.target_value.value_str}**]")
             with pv_col: 
                 st.write(f":blue[**{function.current_value.value_str}**]")
-        elif isinstance(function, AnalogSensorFunction):
+        elif isinstance(function, AnalogScalarSensorFunction):
             with pv_col: 
                 st.write(f":blue[**{format_value(function.sensor_value.value)}** {function.sensor_value.eu}]")
+        elif isinstance(function, TwoStateDiscreteSensorFunction) or isinstance(function, MultiStateDiscreteSensorFunction):
+            with pv_col: 
+                st.write(f":blue[**{function.sensor_value.value_str}**]")
         elif isinstance(function, CoverFunction):
             with pv_col: 
                 st.write(f":blue[**{function.current_state.value_str}**]")
@@ -153,7 +170,7 @@ def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
             analog_item: AnalogItem = None
             if isinstance(function, AnalogControlFunction):
                 analog_item = function.current_value
-            elif isinstance(function, AnalogSensorFunction):
+            elif isinstance(function, AnalogScalarSensorFunction):
                 analog_item = function.sensor_value
             if analog_item is not None:
                 if isinstance(analog_item.value, list):
@@ -403,7 +420,7 @@ def show_components(component: Component, expanded_count):
             count = count - 1 
             show_components(sub_component, count)
 
-def update_program_template_set(container, functional_unit: FunctionalUnit):
+def show_program_template_set(container, functional_unit: FunctionalUnit):
     with container.container():
         st.write("**Templates**")
         program_manager = functional_unit.program_manager
@@ -459,7 +476,7 @@ def show_active_program(container, functional_unit: FunctionalUnit) -> any:
     update_active_program(progress_container, functional_unit)
     return progress_container
 
-def update_active_program(progress_container, functional_unit: FunctionalUnit):
+def update_active_program(progress_container, functional_unit: FunctionalUnit) -> bool:
     current_state_var = functional_unit.state_machine.current_state
     current_state = current_state_var.value_str
     previous_state = st.session_state[current_state_var.nodeid]
@@ -472,7 +489,6 @@ def update_active_program(progress_container, functional_unit: FunctionalUnit):
     with progress_container.container():
         if program_manager is not None: 
             if state_changed or running:
-                # print("updating progress")
                 active_program = program_manager.active_program
                 if active_program.has_progress:
                     st.progress(active_program.current_progress, "Program run progress")
@@ -484,6 +500,15 @@ def update_active_program(progress_container, functional_unit: FunctionalUnit):
                     st.write(f"{0.001 * float(active_program.current_step_runtime.value)}s / {0.001 * float(active_program.estimated_step_runtime.value)}s")
                 with st.expander("Program run details", expanded=False):
                     show_variables_table(active_program.variables)
+
+    # update result once run is finished
+    if "Stopped" in current_state and "Running" in previous_state:
+        print("updating last result")
+        try:
+            program_manager.results[-1].update_variables()
+        except:
+            pass
+
 
 def update_result_set(container, functional_unit: FunctionalUnit):
     with container.container():
@@ -514,8 +539,6 @@ def main():
     # in anyway create a new last_event_update on rerun
     st.session_state[lastEventListUpdateKey] = dt.datetime.now()    
 
-    container_functions = None
-    
     # functional-unit list on the left side
     st.session_state[selectedFunctionalUnitKey] = st.sidebar.selectbox("Select a functional-unit", functional_unit_names)
 
@@ -534,7 +557,7 @@ def main():
         with col_cmd:
             state_machine = selected_functional_unit.state_machine
             methods = list(filter(lambda method: method != "StartProgram", state_machine.method_names ))
-            cmd = st.selectbox("Command", options=methods, index=None, label_visibility="collapsed", key=state_machine.nodeid, on_change=call_state_machine_method(state_machine))
+            cmd = st.selectbox("Command", options=methods, index=None, label_visibility="collapsed", key=state_machine.nodeid, on_change=call_state_machine_method(state_machine), placeholder="Choose a command")
         with col_state:
             container_state = show_state(col_state, selected_functional_unit)
 
@@ -555,8 +578,7 @@ def main():
         with tab_program_manager:
             col_templates, col_status, col_results = st.columns([1, 1, 1])
             with col_templates:
-                container_templates = empty(st.empty())
-                update_program_template_set(container_templates, selected_functional_unit)
+                show_program_template_set(empty(st.empty()), selected_functional_unit)
             with col_status:
                 progress_container = show_active_program(empty(st.empty()), selected_functional_unit)
             with col_results:
