@@ -350,7 +350,7 @@ def show_variables_table(variables: list[BaseVariable], has_description: bool = 
     st.dataframe(data, use_container_width=True, hide_index=True, column_config=column_config)
 
 def show_asset_management(container, device: Device):
-    device_state_machine = device.state_machine
+    device_state_machine = device.device_state
     device_state_methods = device_state_machine.method_names
     operation_mode_state_machine = device.machinery_operation_mode
     operation_mode_methods = [] if operation_mode_state_machine is None else operation_mode_state_machine.method_names

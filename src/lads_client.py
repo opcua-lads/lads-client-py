@@ -4,6 +4,7 @@ import pandas as pd
 import datetime as dt
 from typing import Type, NewType, Any, Self, Tuple, Set
 from asyncua import Client, ua, Node
+from asyncua.ua import DataTypeDefinition
 from asyncua.common.subscription import DataChangeNotif
 from asyncua.common.events import Event
 from enum import IntEnum
@@ -53,10 +54,12 @@ class LADSObjectIds(IntEnum):
 
 class MachineryObjectIds(IntEnum):
     """Machinery specfic numerical node-ids"""
+    MachineryItemIdentificationType = 1004
     MachineryOperationCounterType = 1009
     MachineryLifeTimeCounterType = 1015
 
 class DIObjectIds(IntEnum):
+    DeviceHealthEnumeration = 6244
     LifetimeVariableType = 468
 
 class SubscriptionLevel(IntEnum):
@@ -88,7 +91,9 @@ class Server():
         self.AnalogItemType = self.client.get_node(ua.ObjectIds.AnalogItemType)
         self.TwoStateDiscreteType = self.client.get_node(ua.ObjectIds.TwoStateDiscreteType)
         self.MultiStateDiscreteType = self.client.get_node(ua.ObjectIds.MultiStateDiscreteType)
+        self.EnumerationType = self.client.get_node(ua.ObjectIds.Enumeration)
         self.LifetimeVariableType = self.get_di_node(DIObjectIds.LifetimeVariableType)
+        self.MachineryItemIdentificationType = self.get_machinery_node(MachineryObjectIds.MachineryItemIdentificationType)
         self.MachineryOperationCounterType = self.get_machinery_node(MachineryObjectIds.MachineryOperationCounterType)
         self.MachineryLifeTimeCounterType = self.get_machinery_node(MachineryObjectIds.MachineryLifeTimeCounterType)
         self.DeviceType = self.get_lads_node(LADSObjectIds.DeviceType)
@@ -296,6 +301,12 @@ class LADSNode(Node):
     def temporary_subscribed_variables(self) ->list[BaseVariable]:
         return list(filter(lambda variable: variable.subscription_level == SubscriptionLevel.Temporary, self.variables))
     
+    def variable_named(self, name: str) -> BaseVariable:
+        for variable in self.variables:
+            if name == variable.browse_name.Name:
+                return variable
+        return None
+    
     async def update_variables_async(self):
         variables = remove_none(self.variables)
         await asyncio.gather(*(variable.update_value() for variable in variables))
@@ -499,6 +510,37 @@ class AnalogItem(SubscribedVariable):
                 result = self.engineering_units.DisplayName.Text
         return result
 
+class Enumeration(SubscribedVariable):
+    enum_strings: dict = {}
+
+    @classmethod
+    async def propagate(cls, node: Node, server: Server) -> Self:
+        return await propagate_to(Enumeration, node, server.BaseVariableType, server)
+
+    def __str__(self):
+        return f"{super().__str__()}\n  EnumStrings: {self.enum_strings}"
+    
+    async def init(self, server: Server):
+        await super().init(server)
+        data_type_node_id = await self.read_data_type()
+        data_type_node = Node(self.session, data_type_node_id)
+        name = await data_type_node.read_browse_name()
+        try:
+            enum: IntEnum = ua.__dict__[name.Name]
+            for item in enum:
+                self.enum_strings[item.value] = item.name
+        except:
+            self.enum_strings = {}
+
+    @property
+    def value_str(self) -> str:
+        value = int(self.value)
+        try:
+            result = self.enum_strings[value]
+        except:
+           result = "unknown"
+        return result
+        
 class TwoStateDiscrete(SubscribedVariable):
     true_state: BaseVariable
     false_state: BaseVariable
@@ -749,10 +791,36 @@ class LifetimeCounters(LADSNode):
     def variables(self) -> list[Node]:
         return super().variables + self.lifetime_counters
 
+class Identification(LADSNode):
+    asset_id: BaseVariable
+    component_name: BaseVariable
+    location: BaseVariable
+
+    @classmethod
+    async def propagate(cls, node: Node, server: Server) -> Self:
+        return await propagate_to(Identification, node, server.MachineryItemIdentificationType, server)
+    
+    async def init(self, server: Server):
+        await super().init(server)
+        self._variables = await get_properties_and_variables(self)
+        self._variables.sort(key = lambda variable: variable.display_name)
+        self.asset_id = self.variable_named("AssetId")
+        self.component_name = self.variable_named("ComponentName")
+        self.location = self.variable_named("Location")
+        subscription_variables: list[BaseVariable] = remove_none([self.asset_id, self.component_name, self.location])
+        for variable in subscription_variables:
+            variable.subscription_level = SubscriptionLevel.Permanent
+
+    @property
+    def variables(self) ->list[BaseVariable]:
+        return self._variables
+
 class Component(LADSNode):
-    component_set: LADSSet
+    component_set: LADSSet = None
+    device_health: Enumeration = None
     operation_counters: OperationCounters
     lifetime_counter_set: LifetimeCounters
+    identification: Identification = None
 
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
@@ -762,11 +830,15 @@ class Component(LADSNode):
         await super().init(server)
         self._variables = await get_properties_and_variables(self)
         self._variables.sort(key = lambda variable: variable.display_name)
+        self.device_health = self.variable_named("DeviceHealth")
+        if self.device_health is not None:
+            self.device_health = await Enumeration.propagate(self.device_health, server)
         self.component_set = await ComponentSet.propagate(await self.get_machinery_child("Components"), server)
         if self.component_set is not None:
             await self.component_set.propagate_children(Component, server.ComponentType, server.ComponentSetType)
         self.operation_counters = await OperationCounters.propagate(await self.get_di_child("OperationCounters"), server)
         self.lifetime_counter_set = await LifetimeCounters.propagate(await self.get_machinery_child("LifetimeCounters"), server)
+        self.identification = await Identification.propagate(await self.get_di_child("Identification"), server)
 
     @property
     def components(self) -> list[Component]:
@@ -778,50 +850,44 @@ class Component(LADSNode):
     
     @property
     def variables(self) ->list[BaseVariable]:
-        return self._variables +  remove_none([self.component_set.node_version])
+        return self._variables +  [] if self.component_set is None else remove_none([self.component_set.node_version])
 
-    def variable_named(self, name: str) -> BaseVariable:
-        for variable in self.variables:
-            if name == variable.browse_name.Name:
-                return variable
-        return None
-    
     @property
     def name_plate_variables(self) ->list[BaseVariable]:
-        return self._variables
+        return self._variables if self.identification is None else self.identification.variables
 
 class Device(Component):
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
         return await propagate_to(Device, node, server.DeviceType, server)
     
-    state_machine: StateMachine
+    device_state: StateMachine
     machinery_item_state: StateMachine
     machinery_operation_mode: StateMachine
-    device_health: SubscribedVariable
-    location: SubscribedVariable
-    hierarchical_location: SubscribedVariable
-    operational_location: SubscribedVariable
+    location: SubscribedVariable = None
+    hierarchical_location: SubscribedVariable = None
+    operational_location: SubscribedVariable = None
+    state_machine_variables: list[BaseVariable] = []
 
     async def init(self, server: Server):
         await super().init(server)
         functional_unit_set = await self.get_lads_child("FunctionalUnitSet")
         nodes = await self.get_child_objects(functional_unit_set)
         self.functional_units: list[FunctionalUnit] = await asyncio.gather(*(FunctionalUnit.propagate(node, server) for node in nodes))
-        self.state_machine, self.machinery_item_state, self.machinery_operation_mode, self.device_health = await asyncio.gather(
-            StateMachine.propagate(await self.get_lads_child("StateMachine"), server),
+        self.device_state, self.machinery_item_state, self.machinery_operation_mode = await asyncio.gather(
+            StateMachine.propagate(await self.get_lads_child("DeviceState"), server),
             StateMachine.propagate(await self.get_machinery_child("MachineryItemState"), server),
             StateMachine.propagate(await self.get_machinery_child("MachineryOperationMode"), server),
-            SubscribedVariable.propagate(await self.get_di_child("DeviceHealth"), server)
         )
-        state_machines: list[StateMachine] = remove_none([self.state_machine, self.machinery_item_state, self.machinery_operation_mode])
+        state_machines: list[StateMachine] = remove_none([self.device_state, self.machinery_item_state, self.machinery_operation_mode])
         self.state_machine_variables = list(map(lambda state_machine: state_machine.current_state, state_machines))
         if self.device_health is not None:
             self.state_machine_variables.append(self.device_health)
 
         self.hierarchical_location = self.variable_named("HierarchicalLocation")
         self.operational_location = self.variable_named("OperationalLocation")
-        self.location = self.variable_named("Location")
+        if self.identification is not None:
+            self.location = self.identification.location
         for location in self.location_variables:
             location.subscription_level = SubscriptionLevel.Temporary
 
@@ -832,6 +898,8 @@ class Device(Component):
         variables = self.subscribed_variables
         for functional_unit in self.functional_units:
             variables = variables + functional_unit.all_subscribed_variables
+        if self.identification is not None:
+            variables = variables + self.identification.subscribed_variables
         self.subscription_handler = SubscriptionHandler()
         data_change_handlers = await self.subscription_handler.subscribe_data_change(self.server, variables)
         events_handler = await self.subscription_handler.subscribe_events(self.server, self)
@@ -1426,7 +1494,8 @@ def create_connection(url = "opc.tcp://localhost:26543") -> Server:
         time.sleep(0.1)
     if True:
         for device in server.devices:
-            print (device)
+            print(device)
+            print(device.device_health)
             for component in device.components:
                 print(component)
             for functional_unit in device.functional_units:
