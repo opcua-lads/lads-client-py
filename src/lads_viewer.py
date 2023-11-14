@@ -5,17 +5,22 @@ import time, math
 import matplotlib as plt
 import plotly.graph_objects as go
 from typing import Tuple
-from lads_client import  BaseStateMachineFunction, LADSNode, MultiStateDiscreteControlFunction, MultiStateDiscreteSensorFunction, TimerControlFunction, TwoStateDiscreteControlFunction, TwoStateDiscreteSensorFunction, create_connection, DefaultServerUrl, BaseVariable, AnalogItem, BaseFunctionalStateMachineFunction, Component, CoverFunction, Server, Device, FunctionalUnit, \
+from lads_client import  BaseStateMachineFunction, Connection, LADSNode, MultiStateDiscreteControlFunction, MultiStateDiscreteSensorFunction, TimerControlFunction, TwoStateDiscreteControlFunction, TwoStateDiscreteSensorFunction, create_connection, DefaultServerUrl, BaseVariable, AnalogItem, BaseFunctionalStateMachineFunction, Component, CoverFunction, Server, Device, FunctionalUnit, \
     Function, AnalogControlFunction, AnalogScalarSensorFunction, StartStopControlFunction, MulitModeControlFunction, StateMachine, AnalogControlFunctionWithTotalizer
 from asyncua import ua
 
 st.set_page_config(page_title="LADS OPC UA Client", layout="wide")
 
 @st.cache_resource
-def get_server_connection(url: str) -> Server:
-    server: Server = create_connection(url)
-    print(f"Created server {url}")
-    return server
+def get_server_connection(url: str) -> Connection:
+    connection = Connection(url)
+    return connection
+
+def get_initialized_connection(url: str) -> Connection:
+    connection = get_server_connection(url)
+    while not connection.initialized:
+        time.sleep(0.1)
+    return connection
 
 def format_value(x: float | list[float], decis = 1) -> str:
     result = "NaN"
@@ -529,7 +534,9 @@ def empty(container):
     return container
 
 def main():
-    my_server = get_server_connection(DefaultServerUrl)
+    my_connection = get_initialized_connection(DefaultServerUrl)
+
+    my_server = my_connection.server
     functional_units = my_server.functional_units
 
     # session state

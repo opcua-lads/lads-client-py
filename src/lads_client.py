@@ -1451,62 +1451,64 @@ async def get_properties_and_variables(node: LADSNode) -> list[BaseVariable]:
     result: list[BaseVariable] = await asyncio.gather(*(BaseVariable.propagate(variable, node.server) for variable in variables))
     return result
 
-async def run_connection_async(client: Client, server: Server):
-    reconnecting = False
-    while server.running:
-        try:
-            async with client:
-                if reconnecting:
-                    # does not work :-(
-                    # await client.disconnect()
-                    await client.disconnect_socket()
-                    await asyncio.sleep(2)
-                    await client.connect()
-                    reconnecting = False
-                await server.init()
-                while server.running:
-                    await server.evaluate()
-                    await client.check_connection()
-        except (ConnectionError, ua.UaError):
-            _logger.warning("Reconnecting in 2 seconds")
-            reconnecting = True
-        except Exception as error:
-            _logger.error(error)
-            await asyncio.sleep(2)
-    await client.disconnect()
-    _logger.warning("disconnected")
-
-import threading
-
-def run_connection(client: Client, server: Server):
-    asyncio.run(run_connection_async(client, server))
-
 DefaultServerUrl = "opc.tcp://localhost:26543"
+import threading
+import time 
 
-import time
+class Connection:
+    url: str
+    thread: threading.Thread = None
+    client: Client = None
+    server: Server = None
 
-def create_connection(url = "opc.tcp://localhost:26543") -> Server:
-    client = Client(url)
-    server = Server(client, "My Server")
-    t = threading.Thread(target=run_connection, args=[client, server], daemon=True, name=f"LADS OPC UA Connection {server.name}")
-    t.start()
-    while not server.initialized:
-        time.sleep(0.1)
-    if True:
-        for device in server.devices:
-            print(device)
-            print(device.device_health)
-            for component in device.components:
-                print(component)
-            for functional_unit in device.functional_units:
-                print(functional_unit)
-                for function in functional_unit.functions:
-                    print(function) 
-    return server 
+    def __init__(self, url = DefaultServerUrl) -> None:
+        self.url = url
+        self.thread = threading.Thread(target=self._run_connection, daemon=True, name=f"LADS OPC UA Connection {url}")
+        self.thread.start()
+
+    @property
+    def initialized(self) -> bool:
+        if self.server is None:
+            return False
+        else:
+            return self.server.initialized
+    
+    def _run_connection(self):
+        asyncio.run(self._run_connection_async())
+        
+    async def _run_connection_async(self):
+        running = True
+        # run loop
+        while running:
+            self.client = Client(self.url)
+            self.server = Server(self.client, "My Server")
+            try:
+                async with self.client:
+                    await self.server.init()
+                    # evaluation loop
+                    while self.server.running:
+                        await self.server.evaluate()
+                        await self.client.check_connection()
+            except (ConnectionError, ua.UaError):
+                _logger.warning("Reconnecting in 2 seconds")
+                await asyncio.sleep(2)
+            except Exception as error:
+                _logger.error(error)
+            finally:
+                running = self.server.running
+            if not running:
+                await self.client.disconnect()
+                _logger.warning("disconnected")
 
 def main():
-    server = create_connection()
-    _logger.info(f"Connected to {server}")
+    connection = Connection()
+    print("Connecting", end="")
+    while not connection.initialized:
+        time.sleep(0.2)
+        print(".", end="")
+    print()
+    server = connection.server
+    _logger.warning(f"Connected to {server}")
     if False:
         fu = server.devices[0].functional_units[0]
         sm: FunctionalStateMachine = fu.state_machine
@@ -1519,9 +1521,9 @@ def main():
         server.running = False
     # time.sleep(1)
     while True:
-        _logger.info("ping")
+        _logger.warning("ping")
         time.sleep(1)
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.ERROR)
+    logging.basicConfig(level=logging.WARNING)
     main()
