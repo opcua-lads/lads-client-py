@@ -1,3 +1,12 @@
+"""
+ *
+ * Copyright (c) 2023 Dr. Matthias Arnold, AixEngineers, Aachen, Germany.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ *
+"""
+
 import streamlit as st
 import datetime as dt
 import pandas as pd
@@ -6,7 +15,7 @@ import matplotlib as plt
 import plotly.graph_objects as go
 from typing import Tuple
 from lads_client import BaseStateMachineFunction, Connection, LADSNode, MultiStateDiscreteControlFunction, MultiStateDiscreteSensorFunction, TimerControlFunction
-from lads_client import TwoStateDiscreteControlFunction, TwoStateDiscreteSensorFunction, DefaultServerUrl, BaseVariable, AnalogItem, BaseFunctionalStateMachineFunction, Component, CoverFunction, Server, Device, FunctionalUnit
+from lads_client import TwoStateDiscreteControlFunction, TwoStateDiscreteSensorFunction, DefaultServerUrl, BaseVariable, AnalogItem, BaseFunctionalStateMachineFunction, Component, CoverFunction, Device, FunctionalUnit
 from lads_client import FunctionSet, Function, AnalogControlFunction, AnalogScalarSensorFunction, StartStopControlFunction, MulitModeControlFunction, StateMachine, AnalogControlFunctionWithTotalizer
 from asyncua import ua
 
@@ -427,7 +436,21 @@ def show_components(component: Component, expanded_count):
         with col3:
             if len(component.lifetime_counters) > 0:
                 st.write("Lifetime Counters")
-                show_variables_table(component.lifetime_counters)
+                # show_variables_table(component.lifetime_counters)
+                for counter in component.lifetime_counters:
+                    try:
+                        value = float(counter.value)
+                        start = float(counter.start_value.value)
+                        limit = float(counter.limit_value.value)
+                        eu = counter.eu
+                        warning = False if counter.warning_values is None else any(value < float(warning_value) for warning_value in counter.warning_values.value)
+                        color = "red" if warning else "green"
+                        s = f"{counter.display_name} [{format_number(start)} > :{color}[**{format_number(value)}**] > {format_number(limit)}] {eu}"
+                        r = start - limit
+                        x = value / r + limit if abs(r) > 0 else 0
+                        st.progress(x, s)  
+                    except:
+                        pass
 
     if component.components is not None:
         count = expanded_count

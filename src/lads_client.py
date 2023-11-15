@@ -1,10 +1,18 @@
+"""
+ *
+ * Copyright (c) 2023 Dr. Matthias Arnold, AixEngineers, Aachen, Germany.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ *
+"""
+
 import asyncio
 import logging
 import pandas as pd
 import datetime as dt
 from typing import Type, NewType, Any, Self, Tuple, Set
 from asyncua import Client, ua, Node
-from asyncua.ua import DataTypeDefinition
 from asyncua.common.subscription import DataChangeNotif
 from asyncua.common.events import Event
 from enum import IntEnum
@@ -505,11 +513,11 @@ class AnalogItem(SubscribedVariable):
     
     @property
     def eu(self) -> str:
-        result = ""
         if self.engineering_units is not None:
             if isinstance(self.engineering_units, ua.EUInformation):
                 result = self.engineering_units.DisplayName.Text
-        return result
+                return "%" if " or pct" in result else result
+        return ""
 
 class Enumeration(SubscribedVariable):
     enum_strings: dict = {}
@@ -703,7 +711,8 @@ class LADSSet(LADSNode):
             self.node_version = await NodeVersionVariable.propagate(node_version, server)
             self.node_version.set = self
         except Exception as error:
-            _logger.warning(error)
+            pass
+            # _logger.warning(error)
         self.children = await self.get_child_objects()
 
     async def propagate_children(self, child_class: Type, child_type: Node, set_type: Node):
