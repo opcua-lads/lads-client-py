@@ -5,8 +5,9 @@ import time, math
 import matplotlib as plt
 import plotly.graph_objects as go
 from typing import Tuple
-from lads_client import  BaseStateMachineFunction, Connection, LADSNode, MultiStateDiscreteControlFunction, MultiStateDiscreteSensorFunction, TimerControlFunction, TwoStateDiscreteControlFunction, TwoStateDiscreteSensorFunction, create_connection, DefaultServerUrl, BaseVariable, AnalogItem, BaseFunctionalStateMachineFunction, Component, CoverFunction, Server, Device, FunctionalUnit, \
-    Function, AnalogControlFunction, AnalogScalarSensorFunction, StartStopControlFunction, MulitModeControlFunction, StateMachine, AnalogControlFunctionWithTotalizer
+from lads_client import BaseStateMachineFunction, Connection, LADSNode, MultiStateDiscreteControlFunction, MultiStateDiscreteSensorFunction, TimerControlFunction
+from lads_client import TwoStateDiscreteControlFunction, TwoStateDiscreteSensorFunction, DefaultServerUrl, BaseVariable, AnalogItem, BaseFunctionalStateMachineFunction, Component, CoverFunction, Server, Device, FunctionalUnit
+from lads_client import FunctionSet, Function, AnalogControlFunction, AnalogScalarSensorFunction, StartStopControlFunction, MulitModeControlFunction, StateMachine, AnalogControlFunctionWithTotalizer
 from asyncua import ua
 
 st.set_page_config(page_title="LADS OPC UA Client", layout="wide")
@@ -82,15 +83,21 @@ def add_variable_value_input(variable: BaseVariable, parent: LADSNode = None):
         st.number_input(variable.display_name, on_change = write_variable_value(variable), value=None, placeholder=str(variable.value), key=variable.nodeid, label_visibility="collapsed", help = help)
 
 def show_functions(container, functional_unit: FunctionalUnit) -> dict:
-    with container.container():
-        idx = 0
-        function_containers = {}
-        for function in functional_unit.functions:
+    functions_container = container.container()
+    function_containers = {}
+    show_function_set(functions_container, path="", function_set=functional_unit.function_set, container_dict=function_containers)
+    update_functions(function_containers)
+    return function_containers
+
+def show_function_set(container, path: str, function_set: FunctionSet, container_dict: dict):
+     with container:
+        index = 0
+        for function in function_set.functions:
             if function.is_enabled:
-                idx += 1
-                label = f"**{function.display_name}**"
-                # label = f"**{function.display_name}** :gray[{function.__class__.__name__}]"
-                with st.expander(label=label, expanded=idx < 10):
+                index += 1
+                s = function.display_name if path == "" else "/".join([path, function.display_name])
+                label = f"**{s}**"
+                with st.expander(label=label, expanded=(path == "") and (index < 10)):
                     col_static, col_sp, col_pv = st.columns([4, 4, 5])
                     with col_static:
                         if isinstance(function, BaseStateMachineFunction):
@@ -101,6 +108,8 @@ def show_functions(container, functional_unit: FunctionalUnit) -> dict:
                                     add_variable_value_input(controller_parameter.target_value, controller_parameter)
                                 current_mode = function.current_mode
                                 mode = st.selectbox(label=current_mode.display_name, on_change=write_variable_value(current_mode), options=function.modes, label_visibility="collapsed", key=current_mode.nodeid, placeholder="Choose a mode")
+                            elif isinstance(function, MultiStateDiscreteControlFunction):
+                                add_variable_value_input(function.target_value, function)
                             method_names = function.state_machine.method_names
                             if len(method_names) > 0:
                                 key = function.unique_name
@@ -109,10 +118,11 @@ def show_functions(container, functional_unit: FunctionalUnit) -> dict:
                         container_sp = st.empty()
                     with col_pv:
                         container_pv = st.empty()
-                    function_containers[function] = (container_sp, container_pv)
-    update_functions(function_containers)
-    return function_containers
+                    container_dict[function] = (container_sp, container_pv)
 
+            if function.function_set is not None:
+                show_function_set(container, s, function_set=function.function_set, container_dict=container_dict)
+    
 def update_functions(function_containers: dict):
 
     for function, containers in function_containers.items():
@@ -266,7 +276,7 @@ def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
                     cmap="jet"
                 )
 
-            with st.expander(f"**{function.display_name}**", expanded=(idx==0)):
+            with st.expander(f"**{function.display_name}**", expanded=(idx<=2)):
                 #st.write(f"**{function.display_name}**")
                 st.dataframe(
                     df,
@@ -513,7 +523,6 @@ def update_active_program(progress_container, functional_unit: FunctionalUnit) -
             program_manager.results[-1].update_variables()
         except:
             pass
-
 
 def update_result_set(container, functional_unit: FunctionalUnit):
     with container.container():

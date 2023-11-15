@@ -191,7 +191,7 @@ unique_name_delimiter = "/"
 
 def variant_value_to_str(variant: ua.Variant) -> str:
     if variant is None:
-        return "result"
+        return "unknown"
     value = variant.Value
     if isinstance(value,ua.LocalizedText):
         return value.Text if value.Text is not None else ""
@@ -270,6 +270,7 @@ class LADSNode(Node):
             self.read_display_name(),
             self.read_description()
         )
+        # _logger.info(f"Initializing {self.__class__.__name__}({self.display_name})")
 
     async def finalize_init(self):
         pass
@@ -580,16 +581,16 @@ class MultiStateDiscrete(SubscribedVariable):
         assert(self.enum_strings.data_value.Value.is_array)
 
     @property
-    def value_str(self) -> list[str]:
+    def value_str(self) -> str:
         s = self.values
         i = int(self.value)
         if i in range(len(s)):
-            return s[i]
+            return s[i].Text
         else:
             "unknown"
     
     @property
-    def values(self) -> list[str]:
+    def values(self) -> list[ua.LocalizedText]:
         return self.enum_strings.data_value.Value.Value
 
 class LifetimeCounter(AnalogItem):
@@ -697,15 +698,13 @@ class LADSSet(LADSNode):
     async def init(self, server: Server):
         await super().init(server)
         try:
-            # node_vesion variable is optional
+            # node_version variable is optional
             node_version = await self.get_child("NodeVersion")
-            if node_version is not None:
-                self.node_version = await NodeVersionVariable.propagate(node_version, server)
-                self.node_version.set = self
+            self.node_version = await NodeVersionVariable.propagate(node_version, server)
+            self.node_version.set = self
         except Exception as error:
             _logger.warning(error)
-        finally:
-            self.children = await self.get_child_objects()
+        self.children = await self.get_child_objects()
 
     async def propagate_children(self, child_class: Type, child_type: Node, set_type: Node):
         if self.children is None: 
@@ -949,6 +948,10 @@ class FunctionSet(LADSSet):
         self.functions: list[Function] = await asyncio.gather(*(self.propagate_child(child) for child in self.children))
         self.functions.sort(key = lambda function: function.display_name)
 
+    async def finalize_init(self, functional_parent: LADSNode):
+        await asyncio.gather(*(function.finalize_init(functional_parent) for function in self.functions))
+        
+
     async def propagate_child(self, child: Node) -> Function:
         server = self.server
         types = await browse_types(server, child)
@@ -1139,7 +1142,7 @@ class FunctionalUnit(LADSNode):
         await super().finalize_init()
         self.device = device
         if self.function_set is not None:
-            await asyncio.gather(*(function.finalize_init(self) for function in self.function_set.functions))
+            self.function_set.finalize_init(self)
         # prepare subscriptions (data change will be handled by device)
         self.subscription_handler = SubscriptionHandler()
         events_handler = await self.subscription_handler.subscribe_events(self.server, self)
@@ -1176,6 +1179,7 @@ class FunctionalUnit(LADSNode):
             return []
 
 class Function(LADSNode):
+    functional_parent: LADSNode = None
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
         return await propagate_to(Function, node, server.FunctionType, server)
@@ -1188,13 +1192,16 @@ class Function(LADSNode):
         if self.function_set is not None:
             self.function_set = await FunctionSet.propagate(self.function_set, server)
 
-    async def finalize_init(self, functional_unit: FunctionalUnit):
+    async def finalize_init(self, functional_parent: LADSNode):
         await super().finalize_init()
-        self.functional_unit = functional_unit
+        self.functional_parent = functional_parent
+        if self.function_set is not None:
+            self.function_set.finalize_init(functional_parent)
 
     @property
     def unique_name(self) -> str:
-        return f"{self.functional_unit.unique_name}{unique_name_delimiter}{self.display_name}"
+        parent_name = "unknown" if self.functional_parent is None else self.functional_parent.unique_name
+        return f"{parent_name}{unique_name_delimiter}{self.display_name}"
     
     @property
     def functions(self) -> list[Function]:
@@ -1352,8 +1359,8 @@ class MultiStateDiscreteControlFunction(BaseControlFunction):
 
     async def init(self, server: Server):
         await super().init(server)        
-        self.current_value = await get_lads_two_state_discrete(self, "CurrentValue")
-        self.target_value = await get_lads_two_state_discrete(self, "TargetValue")
+        self.current_value = await get_lads_multi_state_discrete(self, "CurrentValue")
+        self.target_value = await get_lads_multi_state_discrete(self, "TargetValue")
 
 class ControllerParameter(LADSNode):
     @classmethod
@@ -1525,5 +1532,5 @@ def main():
         time.sleep(1)
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.WARNING)
+    logging.basicConfig(level=logging.ERROR)
     main()
