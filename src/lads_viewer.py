@@ -14,7 +14,7 @@ import time, math
 import matplotlib as plt
 import plotly.graph_objects as go
 from typing import Tuple
-from lads_client import BaseStateMachineFunction, Connection, LADSNode, MultiStateDiscreteControlFunction, MultiStateDiscreteSensorFunction, TimerControlFunction
+from lads_client import BaseStateMachineFunction, Connection, DiscreteControlFunction, DiscreteVariable, LADSNode, MultiStateDiscreteControlFunction, MultiStateDiscreteSensorFunction, TimerControlFunction
 from lads_client import TwoStateDiscreteControlFunction, TwoStateDiscreteSensorFunction, DefaultServerUrl, BaseVariable, AnalogItem, BaseFunctionalStateMachineFunction, Component, CoverFunction, Device, FunctionalUnit
 from lads_client import FunctionSet, Function, AnalogControlFunction, AnalogScalarSensorFunction, StartStopControlFunction, MulitModeControlFunction, StateMachine, AnalogControlFunctionWithTotalizer
 from asyncua import ua
@@ -77,9 +77,18 @@ def write_variable_value(variable: BaseVariable):
     if variable is None: 
         return
     key = variable.nodeid
-    if not key in st.session_state:
+    if not key in st.session_state: 
         return
     variable.set_value(st.session_state[key])
+    st.session_state[key] = None
+
+def write_discrete_variable_value(variable: DiscreteVariable):
+    if variable is None: 
+        return
+    key = variable.nodeid
+    if not key in st.session_state: 
+        return
+    variable.set_value_from_str(st.session_state[key])
     st.session_state[key] = None
 
 def add_variable_value_input(variable: BaseVariable, parent: LADSNode = None):
@@ -117,8 +126,9 @@ def show_function_set(container, path: str, function_set: FunctionSet, container
                                     add_variable_value_input(controller_parameter.target_value, controller_parameter)
                                 current_mode = function.current_mode
                                 mode = st.selectbox(label=current_mode.display_name, on_change=write_variable_value(current_mode), options=function.modes, label_visibility="collapsed", key=current_mode.nodeid, placeholder="Choose a mode")
-                            elif isinstance(function, MultiStateDiscreteControlFunction):
-                                add_variable_value_input(function.target_value, function)
+                            elif isinstance(function, DiscreteControlFunction):
+                                target_value = function.target_value
+                                cmd = st.selectbox(label="Command", options=target_value.values_as_str, index=None, label_visibility="collapsed", key=target_value.nodeid, on_change=write_discrete_variable_value(target_value), placeholder="Choose a value")
                             method_names = function.state_machine.method_names
                             if len(method_names) > 0:
                                 key = function.unique_name

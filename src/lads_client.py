@@ -26,7 +26,6 @@ Method = NewType("Method", LADSNode)
 Component = NewType("Component", LADSNode)
 Device = NewType("Device", Component)
 FunctionalUnit = NewType("FunctionalUnit", LADSNode)
-Function = NewType("Function", LADSNode)
       
 # pylint: disable=C0103
 class LADSObjectIds(IntEnum):
@@ -550,7 +549,30 @@ class Enumeration(SubscribedVariable):
            result = "unknown"
         return result
         
-class TwoStateDiscrete(SubscribedVariable):
+class DiscreteVariable(SubscribedVariable):
+
+    @property
+    def values(self) -> list[ua.LocalizedText]:
+        return []
+    
+    @property
+    def values_as_str(self) -> list[str]:
+        return list(map(lambda value: value.Text, self.values))
+    
+    def set_value_from_str(self, value_str: str):
+        if value_str is None:
+            return
+        try:
+            values = self.values_as_str
+            value = values.index(value_str)
+            if isinstance(self, MultiStateDiscrete):
+                self.set_value(value)
+            else:
+                self.set_value(value == 0)
+        except Exception as error:
+            print(error)
+
+class TwoStateDiscrete(DiscreteVariable):
     true_state: BaseVariable
     false_state: BaseVariable
 
@@ -572,8 +594,12 @@ class TwoStateDiscrete(SubscribedVariable):
             return self.true_state.value_str
         else:
             return self.false_state.value_str
-    
-class MultiStateDiscrete(SubscribedVariable):
+
+    @property
+    def values(self) -> list[ua.LocalizedText]:
+        return [self.true_state.data_value.Value.Value, self.false_state.data_value.Value.Value]
+
+class MultiStateDiscrete(DiscreteVariable):
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
         return await propagate_to(MultiStateDiscrete, node, server.MultiStateDiscreteType, server)
@@ -947,6 +973,49 @@ class Device(Component):
         else:
             return []
 
+class Function(LADSNode):
+    functional_parent: LADSNode = None
+    @classmethod
+    async def propagate(cls, node: Node, server: Server) -> Self:
+        return await propagate_to(Function, node, server.FunctionType, server)
+    
+    async def init(self, server: Server):
+        await super().init(server)
+        node = await self.get_lads_child("IsEnabled")
+        self.is_enabled = await BaseVariable.propagate(node, server)
+        self.function_set: FunctionSet = await self.get_lads_child("FunctionSet")
+        if self.function_set is not None:
+            self.function_set = await FunctionSet.propagate(self.function_set, server)
+
+    async def finalize_init(self, functional_parent: LADSNode):
+        await super().finalize_init()
+        self.functional_parent = functional_parent
+        if self.function_set is not None:
+            self.function_set.finalize_init(functional_parent)
+
+    @property
+    def unique_name(self) -> str:
+        parent_name = "unknown" if self.functional_parent is None else self.functional_parent.unique_name
+        return f"{parent_name}{unique_name_delimiter}{self.display_name}"
+    
+    @property
+    def functions(self) -> list[Function]:
+        return self.function_set.functions
+    
+    @property
+    def variables(self) ->list[BaseVariable]:
+        return [self.is_enabled]
+    
+    @property
+    def all_variables(self) -> list[BaseVariable]:
+        nodes = self.variables
+        if self.function_set:
+            nodes = nodes + self.function_set.variables
+            for function in self.function_set.functions:
+                variables = function.all_variables
+                nodes = nodes + variables
+        return nodes
+
 class FunctionSet(LADSSet):
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
@@ -1151,7 +1220,7 @@ class FunctionalUnit(LADSNode):
         await super().finalize_init()
         self.device = device
         if self.function_set is not None:
-            self.function_set.finalize_init(self)
+            await self.function_set.finalize_init(self)
         # prepare subscriptions (data change will be handled by device)
         self.subscription_handler = SubscriptionHandler()
         events_handler = await self.subscription_handler.subscribe_events(self.server, self)
@@ -1186,49 +1255,6 @@ class FunctionalUnit(LADSNode):
             return self.subscription_handler.event_list
         else:
             return []
-
-class Function(LADSNode):
-    functional_parent: LADSNode = None
-    @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(Function, node, server.FunctionType, server)
-    
-    async def init(self, server: Server):
-        await super().init(server)
-        node = await self.get_lads_child("IsEnabled")
-        self.is_enabled = await BaseVariable.propagate(node, server)
-        self.function_set: FunctionSet = await self.get_lads_child("FunctionSet")
-        if self.function_set is not None:
-            self.function_set = await FunctionSet.propagate(self.function_set, server)
-
-    async def finalize_init(self, functional_parent: LADSNode):
-        await super().finalize_init()
-        self.functional_parent = functional_parent
-        if self.function_set is not None:
-            self.function_set.finalize_init(functional_parent)
-
-    @property
-    def unique_name(self) -> str:
-        parent_name = "unknown" if self.functional_parent is None else self.functional_parent.unique_name
-        return f"{parent_name}{unique_name_delimiter}{self.display_name}"
-    
-    @property
-    def functions(self) -> list[Function]:
-        return self.function_set.functions
-    
-    @property
-    def variables(self) ->list[BaseVariable]:
-        return [self.is_enabled]
-    
-    @property
-    def all_variables(self) -> list[BaseVariable]:
-        nodes = self.variables
-        if self.function_set:
-            nodes = nodes + self.function_set.variables
-            for function in self.function_set.functions:
-                variables = function.all_variables
-                nodes = nodes + variables
-        return nodes
 
 class BaseStateMachineFunction(Function):
     state_machine: StateMachine
@@ -1351,7 +1377,11 @@ class TimerControlFunction(AnalogControlFunction):
     def variables(self) ->list[BaseVariable]:
         return super().variables + [self.difference_value]
     
-class TwoStateDiscreteControlFunction(BaseControlFunction):
+class DiscreteControlFunction(BaseControlFunction):
+    target_value: DiscreteVariable
+    current_value: DiscreteVariable
+
+class TwoStateDiscreteControlFunction(DiscreteControlFunction):
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
         return await propagate_to(TwoStateDiscreteControlFunction, node, server.TwoStateDiscreteControlFunctionType, server)
@@ -1361,7 +1391,7 @@ class TwoStateDiscreteControlFunction(BaseControlFunction):
         self.current_value = await get_lads_two_state_discrete(self, "CurrentValue")
         self.target_value = await get_lads_two_state_discrete(self, "TargetValue")
 
-class MultiStateDiscreteControlFunction(BaseControlFunction):
+class MultiStateDiscreteControlFunction(DiscreteControlFunction):
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
         return await propagate_to(MultiStateDiscreteControlFunction, node, server.MultiStateDiscreteControlFunctionType, server)
