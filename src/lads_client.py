@@ -26,6 +26,7 @@ Method = NewType("Method", LADSNode)
 Component = NewType("Component", LADSNode)
 Device = NewType("Device", Component)
 FunctionalUnit = NewType("FunctionalUnit", LADSNode)
+Function = NewType("Function", LADSNode)
       
 # pylint: disable=C0103
 class LADSObjectIds(IntEnum):
@@ -133,8 +134,9 @@ class Server():
         self.ResultType = self.get_lads_node(LADSObjectIds.ResultType)
 
         # read data tyoes
+        # self.data_types = await self.client.load_data_type_definitions(overwrite_existing=True)
         self.data_types = await self.client.load_data_type_definitions()
-
+        
         # browse for devices in DeviceSet
         device_set = await self.client.nodes.objects.get_child(f"{self.ns_DI}:DeviceSet")
         nodes = await device_set.get_children(refs = ua.ObjectIds.HasChild, nodeclassmask = ua.NodeClass.Object)
@@ -685,8 +687,15 @@ class FunctionalStateMachine(StateMachine):
     
     def start_program(self, program_template: str, properties: pd.DataFrame, supervisory_job_id: str, supervisory_task_id: str, samples: pd.DataFrame):
         key_value_list = None
-        for index, row in properties.iterrows():
+        sample_info_list = None
+        try:
             key_value_cls = self.server.data_types["KeyValueType"]
+            sample_info_cls = self.server.data_types["SampleInfoType"]
+        except Exception as error:
+            print("ExtnesionObjects not found", error)
+            return
+                    
+        for index, row in properties.iterrows():
             key_value = key_value_cls(
                 str(row["Key"]), 
                 str(row["Value"])
@@ -694,9 +703,7 @@ class FunctionalStateMachine(StateMachine):
             if key_value_list is None:
                 key_value_list = []
             key_value_list.append(key_value)
-        sample_info_list = None
         for index, row in samples.iterrows():
-            sample_info_cls = self.server.data_types["SampleInfoType"]
             sample_info = sample_info_cls(
                 str(row["ContainerId"]),
                 str(row["SampleId"]),
@@ -991,7 +998,7 @@ class Function(LADSNode):
         await super().finalize_init()
         self.functional_parent = functional_parent
         if self.function_set is not None:
-            self.function_set.finalize_init(functional_parent)
+            await self.function_set.finalize_init(functional_parent)
 
     @property
     def unique_name(self) -> str:
@@ -1555,7 +1562,7 @@ def main():
     print()
     server = connection.server
     _logger.warning(f"Connected to {server}")
-    if False:
+    while False:
         fu = server.devices[0].functional_units[0]
         sm: FunctionalStateMachine = fu.state_machine
         sm.start_program("MyTemplate", 
@@ -1563,10 +1570,8 @@ def main():
                          "MyJob", 
                          "MyTask", 
                          pd.DataFrame())
-        time.sleep(10)
-        server.running = False
-    # time.sleep(1)
-    while True:
+        time.sleep(60)
+    while server.running:
         _logger.warning("ping")
         time.sleep(1)
 
