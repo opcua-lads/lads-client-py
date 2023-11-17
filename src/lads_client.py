@@ -76,7 +76,7 @@ class SubscriptionLevel(IntEnum):
     Permanent = 2
 
 class Server():
-    def __init__(self, client: Client, name: str) -> None:
+    def __init__(self, client: Client, name: str):
         self.client = client
         self.name = name
         self.server = self
@@ -85,7 +85,7 @@ class Server():
         self.running = True
         self.call_async_queue = Queue()
 
-    async def init(self):
+    async def init(self, data_types: dict) -> dict:
         # read namespace indices
         self.ns_DI = await self.client.get_namespace_index("http://opcfoundation.org/UA/DI/")
         self.ns_AMB = await self.client.get_namespace_index("http://opcfoundation.org/UA/AMB/")
@@ -134,9 +134,17 @@ class Server():
         self.ResultType = self.get_lads_node(LADSObjectIds.ResultType)
 
         # read data tyoes
-        # self.data_types = await self.client.load_data_type_definitions(overwrite_existing=True)
-        self.data_types = await self.client.load_data_type_definitions()
-        
+        if data_types is None:
+            data_types = await self.client.load_data_type_definitions(overwrite_existing=False)
+        try:
+            self.KeyValueType = data_types["KeyValueType"]
+            self.SampleInfoType = data_types["SampleInfoType"]
+            self.NameNodeIdDataType = data_types["NameNodeIdDataType"]
+        except:
+            _logger.error("Unable to load datatype definitions", data_types)
+            await self.client.close_session()
+            return None
+            
         # browse for devices in DeviceSet
         device_set = await self.client.nodes.objects.get_child(f"{self.ns_DI}:DeviceSet")
         nodes = await device_set.get_children(refs = ua.ObjectIds.HasChild, nodeclassmask = ua.NodeClass.Object)
@@ -145,6 +153,7 @@ class Server():
             await device.finalize_init()
             self.devices.append(device)
         self.initialized = True
+        return data_types
 
     async def evaluate(self):
         if not self.call_async_queue.empty():
@@ -687,24 +696,17 @@ class FunctionalStateMachine(StateMachine):
     
     def start_program(self, program_template: str, properties: pd.DataFrame, supervisory_job_id: str, supervisory_task_id: str, samples: pd.DataFrame):
         key_value_list = None
-        sample_info_list = None
-        try:
-            key_value_cls = self.server.data_types["KeyValueType"]
-            sample_info_cls = self.server.data_types["SampleInfoType"]
-        except Exception as error:
-            print("ExtnesionObjects not found", error)
-            return
-                    
         for index, row in properties.iterrows():
-            key_value = key_value_cls(
+            key_value = self.server.KeyValueType(
                 str(row["Key"]), 
                 str(row["Value"])
             )
             if key_value_list is None:
                 key_value_list = []
             key_value_list.append(key_value)
+        sample_info_list = None
         for index, row in samples.iterrows():
-            sample_info = sample_info_cls(
+            sample_info = self.server.SampleInfoType(
                 str(row["ContainerId"]),
                 str(row["SampleId"]),
                 str(row["Position"]),
@@ -1513,6 +1515,7 @@ class Connection:
     thread: threading.Thread = None
     client: Client = None
     server: Server = None
+    data_types: dict = None
 
     def __init__(self, url = DefaultServerUrl) -> None:
         self.url = url
@@ -1537,7 +1540,7 @@ class Connection:
             self.server = Server(self.client, "My Server")
             try:
                 async with self.client:
-                    await self.server.init()
+                    self.data_types = await self.server.init(self.data_types)
                     # evaluation loop
                     while self.server.running:
                         await self.server.evaluate()
