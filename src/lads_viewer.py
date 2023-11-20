@@ -15,7 +15,7 @@ import matplotlib as plt
 import plotly.graph_objects as go
 from typing import Tuple
 from lads_client import BaseStateMachineFunction, Connection, DiscreteControlFunction, DiscreteVariable, LADSNode, MultiStateDiscreteControlFunction, MultiStateDiscreteSensorFunction, TimerControlFunction
-from lads_client import TwoStateDiscreteControlFunction, TwoStateDiscreteSensorFunction, DefaultServerUrl, BaseVariable, AnalogItem, BaseFunctionalStateMachineFunction, Component, CoverFunction, Device, FunctionalUnit
+from lads_client import TwoStateDiscreteControlFunction, TwoStateDiscreteSensorFunction, DefaultServerUrl, BaseVariable, AnalogItem, BaseControlFunction, Component, CoverFunction, Device, FunctionalUnit
 from lads_client import FunctionSet, Function, AnalogControlFunction, AnalogScalarSensorFunction, StartStopControlFunction, MulitModeControlFunction, StateMachine, AnalogControlFunctionWithTotalizer
 from asyncua import ua
 
@@ -49,7 +49,7 @@ def format_number(x: float, decis = 1) -> str:
     finally:
         return result
 
-def function_state_color(function: BaseFunctionalStateMachineFunction) -> str:
+def function_state_color(function: BaseControlFunction) -> str:
     return state_color(function.current_state)
 
 def state_color(current_state: BaseVariable) -> str:
@@ -356,7 +356,7 @@ def show_variables_table(variables: list[BaseVariable], has_description: bool = 
     values = [] 
     descriptions = []
     for variable in variables:
-        names.append(variable.display_name if variable.alternate_display_name is None else variable.alternate_display_name)
+        names.append(variable.display_name)
         values.append(variable.value_str)
         if has_description:
             descriptions.append(variable.description.Text if variable.description.Text is not None else "")
@@ -484,13 +484,13 @@ def show_state(container, functional_unit: FunctionalUnit) -> any:
     return container_state
 
 def update_state(container, functional_unit: FunctionalUnit) -> bool:
-    current_state_var = functional_unit.state_machine.current_state
+    current_state_var = functional_unit.current_state
     with container:
         st.write(f":{state_color(current_state_var)}[**{current_state_var.value_str}**]")
     return False
 
 def show_active_program(container, functional_unit: FunctionalUnit) -> any:
-    current_state_var = functional_unit.state_machine.current_state
+    current_state_var = functional_unit.current_state
     st.session_state[current_state_var.nodeid] = "Init"
 
     with container.container():
@@ -518,14 +518,14 @@ def show_active_program(container, functional_unit: FunctionalUnit) -> any:
                                             num_rows="dynamic", hide_index=True, use_container_width=True)
             submitted = st.form_submit_button("Start Program")
             if submitted:
-                functional_unit.state_machine.start_program(template_id, key_value_df, job_id, task_id, samples_df)
+                functional_unit.functional_unit_state.start_program(template_id, key_value_df, job_id, task_id, samples_df)
 
     progress_container = empty(st.empty())
     update_active_program(progress_container, functional_unit)
     return progress_container
 
 def update_active_program(progress_container, functional_unit: FunctionalUnit) -> bool:
-    current_state_var = functional_unit.state_machine.current_state
+    current_state_var = functional_unit.current_state
     current_state = current_state_var.value_str
     previous_state = st.session_state[current_state_var.nodeid]
     st.session_state[current_state_var.nodeid] = current_state
@@ -604,7 +604,7 @@ def main():
     with st.expander(f"**{selected_functional_unit.unique_name}**", expanded=True):
         col_cmd, col_state = st.columns([2, 3])
         with col_cmd:
-            state_machine = selected_functional_unit.state_machine
+            state_machine = selected_functional_unit.functional_unit_state
             methods = list(filter(lambda method: method != "StartProgram", state_machine.method_names ))
             cmd = st.selectbox("Command", options=methods, index=None, label_visibility="collapsed", key=state_machine.nodeid, on_change=call_state_machine_method(state_machine), placeholder="Choose a command")
         with col_state:
