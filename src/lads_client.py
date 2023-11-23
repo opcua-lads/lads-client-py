@@ -40,6 +40,7 @@ class LADSObjectIds(IntEnum):
     FunctionSetType = 1026
     FunctionType= 1004
     AnalogScalarSensorFunctionType = 1016
+    AnalogScalarSensorFunctionWithCompensationType = 1000
     AnalogArraySensorFunctionType = 1015
     TwoStateDiscreteSensorFunctionType = 1031
     MultiStateDiscreteSensorFunctionType = 1037
@@ -108,6 +109,7 @@ class LADSTypes:
         self.FunctionSetType = self.get_lads_node(LADSObjectIds.FunctionSetType)
         self.FunctionType = self.get_lads_node(LADSObjectIds.FunctionType)
         self.AnalogScalarSensorFunctionType = self.get_lads_node(LADSObjectIds.AnalogScalarSensorFunctionType)
+        self.AnalogScalarSensorFunctionWithCompensationType = self.get_lads_node(LADSObjectIds.AnalogScalarSensorFunctionWithCompensationType)
         self.AnalogArraySensorFunctionType = self.get_lads_node(LADSObjectIds.AnalogArraySensorFunctionType)
         self.TwoStateDiscreteSensorFunctionType = self.get_lads_node(LADSObjectIds.TwoStateDiscreteSensorFunctionType)
         self.MultiStateDiscreteSensorFunctionType = self.get_lads_node(LADSObjectIds.MultiStateDiscreteSensorFunctionType)
@@ -166,10 +168,15 @@ class Server(LADSTypes):
         device_set = await self.client.nodes.objects.get_child(f"{self.ns_DI}:DeviceSet")
         nodes = await device_set.get_children(refs = ua.ObjectIds.HasChild, nodeclassmask = ua.NodeClass.Object)
         for node in nodes:
-            device: Device = await Device.propagate(node, self)
-            await device.finalize_init()
-            self.devices.append(device)
-        
+            try:
+                await self.client.check_connection()
+                device: Device = await Device.propagate(node, self)
+                await device.finalize_init()
+                self.devices.append(device)
+            except Exception as error:
+                _logger.error(error)
+                return data_types
+
         self.initialized = True
         return data_types
 
@@ -298,7 +305,7 @@ class LADSNode(Node):
             self.read_display_name(),
             self.read_description()
         )
-        # _logger.info(f"Initializing {self.__class__.__name__}({self.display_name})")
+        _logger.info(f"Initializing {self.__class__.__name__}({self.display_name})")
 
     async def finalize_init(self):
         pass
@@ -1069,6 +1076,8 @@ class FunctionSet(LADSSet):
                 function = await AnalogControlFunction.propagate(child, server)
             elif server.TimerControlFunctionType in types:
                 function = await TimerControlFunction.propagate(child, server)
+            elif server.AnalogScalarSensorFunctionWithCompensationType in types:
+                function = await AnalogScalarSensorFunctionWithCompensation.propagate(child, server)
             elif server.AnalogScalarSensorFunctionType in types:
                 function = await AnalogScalarSensorFunction.propagate(child, server)
             elif server.AnalogArraySensorFunctionType in types:
@@ -1339,6 +1348,15 @@ class AnalogScalarSensorFunction(BaseSensorFunction):
         await super().init(server)        
         self.sensor_value = await get_lads_analog_item(self, "SensorValue")
 
+class AnalogScalarSensorFunctionWithCompensation(AnalogScalarSensorFunction):
+    @classmethod
+    async def propagate(cls, node: Node, server: Server) -> Self:
+        return await propagate_to(AnalogScalarSensorFunctionWithCompensation, node, server.AnalogScalarSensorFunctionWithCompensationType, server)
+
+    async def init(self, server: Server):
+        await super().init(server)        
+        self.compensation_value = await get_lads_analog_item(self, "CompensationValue")
+
 class AnalogArraySensorFunction(AnalogScalarSensorFunction):
     @classmethod
     async def propagate(cls, node: Node, server: Server) -> Self:
@@ -1542,7 +1560,7 @@ async def get_properties_and_variables(node: LADSNode) -> list[BaseVariable]:
     result: list[BaseVariable] = await asyncio.gather(*(BaseVariable.propagate(variable, node.server) for variable in variables))
     return result
 
-DefaultServerUrl = "opc.tcp://localhost:26543"
+DefaultServerUrl = "opc.tcp://localhost:26544"
 import threading
 import time 
 
@@ -1615,5 +1633,5 @@ def main():
         time.sleep(1)
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.ERROR)
+    logging.basicConfig(level=logging.WARNING)
     main()

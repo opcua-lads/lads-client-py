@@ -14,7 +14,7 @@ import time, math
 import matplotlib as plt
 import plotly.graph_objects as go
 from typing import Tuple
-from lads_client import BaseStateMachineFunction, Connection, DiscreteControlFunction, DiscreteVariable, LADSNode, MultiStateDiscreteControlFunction, MultiStateDiscreteSensorFunction, TimerControlFunction
+from lads_client import AnalogScalarSensorFunctionWithCompensation, BaseStateMachineFunction, Connection, DiscreteControlFunction, DiscreteVariable, LADSNode, MultiStateDiscreteControlFunction, MultiStateDiscreteSensorFunction, TimerControlFunction
 from lads_client import TwoStateDiscreteControlFunction, TwoStateDiscreteSensorFunction, DefaultServerUrl, BaseVariable, AnalogItem, BaseControlFunction, Component, CoverFunction, Device, FunctionalUnit
 from lads_client import FunctionSet, Function, AnalogControlFunction, AnalogScalarSensorFunction, StartStopControlFunction, MulitModeControlFunction, StateMachine, AnalogControlFunctionWithTotalizer
 from asyncua import ua
@@ -175,8 +175,13 @@ def update_functions(function_containers: dict):
             with pv_col: 
                 st.write(f":blue[**{function.current_value.value_str}**]")
         elif isinstance(function, AnalogScalarSensorFunction):
+            if isinstance(function, AnalogScalarSensorFunctionWithCompensation):
+                if function.compensation_value is not None:
+                    with sp_col:
+                        st.write(f":gray[{format_value(function.compensation_value.value)} {function.compensation_value.eu}]")
             with pv_col: 
                 st.write(f":blue[**{format_value(function.sensor_value.value)}** {function.sensor_value.eu}]")
+
         elif isinstance(function, TwoStateDiscreteSensorFunction) or isinstance(function, MultiStateDiscreteSensorFunction):
             with pv_col: 
                 st.write(f":blue[**{function.sensor_value.value_str}**]")
