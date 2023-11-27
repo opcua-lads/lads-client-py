@@ -14,23 +14,23 @@ import time, math
 import matplotlib as plt
 import plotly.graph_objects as go
 from typing import Tuple
-from lads_client import AnalogScalarSensorFunctionWithCompensation, BaseStateMachineFunction, Connection, DiscreteControlFunction, DiscreteVariable, LADSNode, MultiStateDiscreteControlFunction, MultiStateDiscreteSensorFunction, TimerControlFunction
-from lads_client import TwoStateDiscreteControlFunction, TwoStateDiscreteSensorFunction, DefaultServerUrl, BaseVariable, AnalogItem, BaseControlFunction, Component, CoverFunction, Device, FunctionalUnit
+from lads_client import AnalogScalarSensorFunctionWithCompensation, BaseStateMachineFunction, Connection, Connections, DiscreteControlFunction, DiscreteVariable, LADSNode, MultiStateDiscreteControlFunction, MultiStateDiscreteSensorFunction, TimerControlFunction
+from lads_client import TwoStateDiscreteControlFunction, TwoStateDiscreteSensorFunction, BaseVariable, AnalogItem, BaseControlFunction, Component, CoverFunction, Device, FunctionalUnit
 from lads_client import FunctionSet, Function, AnalogControlFunction, AnalogScalarSensorFunction, StartStopControlFunction, MulitModeControlFunction, StateMachine, AnalogControlFunctionWithTotalizer
 from asyncua import ua
 
 st.set_page_config(page_title="LADS OPC UA Client", layout="wide")
 
 @st.cache_resource
-def get_server_connection(url: str) -> Connection:
-    connection = Connection(url)
-    return connection
+def get_server_connections(config_file: str = "src/config.json") -> Connections:
+    connections = Connections(config_file)
+    return connections
 
-def get_initialized_connection(url: str) -> Connection:
-    connection = get_server_connection(url)
-    while not connection.initialized:
+def get_initialized_connections() -> Connections:
+    connections = get_server_connections()
+    while not connections.initialized:
         time.sleep(0.1)
-    return connection
+    return connections
 
 def format_value(x: float | list[float], decis = 1) -> str:
     result = "NaN"
@@ -581,10 +581,11 @@ def empty(container):
     return container
 
 def main():
-    my_connection = get_initialized_connection(DefaultServerUrl)
+    connections = get_initialized_connections()
+    functional_units = connections.functional_units
 
-    my_server = my_connection.server
-    functional_units = my_server.functional_units
+    #my_server = my_connection.server
+    # functional_units = my_server.functional_units
 
     # session state
     functional_unit_names = list(map(lambda functional_unit: functional_unit.unique_name, functional_units))

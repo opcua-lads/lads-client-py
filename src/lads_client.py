@@ -81,7 +81,7 @@ class LADSTypes:
     def __init__(self, client: Client):
         self.client = client
 
-    async def init(self, data_types: dict) -> dict:
+    async def init(self) -> dict:
         # read namespace indices
         self.ns_DI = await self.client.get_namespace_index("http://opcfoundation.org/UA/DI/")
         self.ns_AMB = await self.client.get_namespace_index("http://opcfoundation.org/UA/AMB/")
@@ -130,18 +130,18 @@ class LADSTypes:
         self.ResultSetType = self.get_lads_node(LADSObjectIds.ResultSetType)
         self.ResultType = self.get_lads_node(LADSObjectIds.ResultType)
 
-        # read data tyoes
-        if data_types is None:
-            data_types = await self.client.load_data_type_definitions(overwrite_existing=False)
+        # read data tyoes only once - asyncua design problem..
+        if Connection.data_types is None:
+            Connection.data_types = {"Locked": True}
+            Connection.data_types = await self.client.load_data_type_definitions(overwrite_existing=False)
         try:
+            data_types = Connection.data_types
             self.KeyValueType = data_types["KeyValueType"]
             self.SampleInfoType = data_types["SampleInfoType"]
             self.NameNodeIdDataType = data_types["NameNodeIdDataType"]
-        except:
-            _logger.error("Unable to load datatype definitions", data_types)
+        except Exception as error:
+            _logger.error(f"Unable to load datatype definitions {error}", error)
             await self.client.close_session()
-            return None
-        return data_types
             
     def get_di_node(self, id: int) -> Node | None:
         return self.client.get_node(ua.NodeId(id, self.ns_DI))
@@ -153,18 +153,21 @@ class LADSTypes:
         return self.client.get_node(ua.NodeId(id, self.ns_LADS))
     
 class Server(LADSTypes):
-    def __init__(self, client: Client, name: str):
+    def __init__(self, client: Client):
         super().__init__(client)
-        self.name = name
+        self.name = "Unknown Server"
         self.devices: list[Device] = []
         self.initialized = False
         self.running = True
         self.call_async_queue = Queue()
 
-    async def init(self, data_types: dict) -> dict:
-        data_types = await super().init(data_types)
+    async def init(self) -> dict:
+        data_types = await super().init()
             
         # browse for devices in DeviceSet
+        product_uri = self.client.get_node(ua.ObjectIds.Server_ServerStatus_BuildInfo_ProductUri)
+        self.name: str = await product_uri.read_value()
+
         device_set = await self.client.nodes.objects.get_child(f"{self.ns_DI}:DeviceSet")
         nodes = await device_set.get_children(refs = ua.ObjectIds.HasChild, nodeclassmask = ua.NodeClass.Object)
         for node in nodes:
@@ -1560,18 +1563,17 @@ async def get_properties_and_variables(node: LADSNode) -> list[BaseVariable]:
     result: list[BaseVariable] = await asyncio.gather(*(BaseVariable.propagate(variable, node.server) for variable in variables))
     return result
 
-DefaultServerUrl = "opc.tcp://localhost:26544"
+DefaultServerUrl = "opc.tcp://localhost:26543"
 import threading
 import time 
+import json
 
 class Connection:
-    url: str
-    thread: threading.Thread = None
-    client: Client = None
-    server: Server = None
     data_types: dict = None
 
     def __init__(self, url = DefaultServerUrl) -> None:
+        self.client: Client = None
+        self.server: Server = None
         self.url = url
         self.thread = threading.Thread(target=self._run_connection, daemon=True, name=f"LADS OPC UA Connection {url}")
         self.thread.start()
@@ -1590,17 +1592,17 @@ class Connection:
         running = True
         # run loop
         while running:
-            self.client = Client(self.url)
-            self.server = Server(self.client, "My Server")
+            self.client = Client(self.url)            
+            self.server = Server(self.client)
             try:
                 async with self.client:
-                    self.data_types = await self.server.init(self.data_types)
+                    await self.server.init()
                     # evaluation loop
                     while self.server.running:
                         await self.server.evaluate()
                         await self.client.check_connection()
-            except (ConnectionError, ua.UaError):
-                _logger.warning("Reconnecting in 2 seconds")
+            except (ConnectionError, ua.UaError) as error:
+                _logger.warning(f"Reconnecting in 2 seconds: {error}")
                 await asyncio.sleep(2)
             except Exception as error:
                 _logger.error(error)
@@ -1610,8 +1612,44 @@ class Connection:
                 await self.client.disconnect()
                 _logger.warning("disconnected")
 
+class Connections:
+    connections: list[Connection] = []
+
+    def __init__(self, config_file = "src/config.json") -> None:
+        try:
+            with open(config_file) as f:
+                print(f"parsing config file {config_file}")
+                data = json.load(f)
+                for connection in data['connections']:
+                    url = connection["url"]
+                    print(f"Add conncetion with url {url}")
+                    self.add(url)
+        except Exception as error:
+            _logger.error(f"Invalid config file {config_file}: {error}")
+
+    def add(self, url: str) -> Connection:
+        connection = Connection(url)
+        self.connections.append(connection)
+        return connection
+
+    @property
+    def initialized(self) -> bool:
+        result = True
+        for connection in self.connections:
+            result = result and connection.initialized
+        return result
+    
+    @property
+    def functional_units(self) -> list[FunctionalUnit]:
+        result: list[FunctionalUnit] = []
+        if self.initialized:
+            for connection in self.connections:
+                result.extend(connection.server.functional_units)
+        return result
+
 def main():
-    connection = Connection()
+    connections = Connections()
+    connection = connections.connections[0]
     print("Connecting", end="")
     while not connection.initialized:
         time.sleep(0.2)
