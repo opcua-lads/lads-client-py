@@ -21,16 +21,17 @@ from asyncua import ua
 
 st.set_page_config(page_title="LADS OPC UA Client", layout="wide")
 
-@st.cache_resource
+@st.cache_resource(show_spinner="Connecting to OPC servers")
 def get_server_connections(config_file: str = "src/config.json") -> Connections:
     connections = Connections(config_file)
     return connections
 
 def get_initialized_connections() -> Connections:
-    connections = get_server_connections()
-    while not connections.initialized:
-        time.sleep(0.1)
-    return connections
+    with st.spinner("Initializing OPC connections ..."):
+        connections = get_server_connections()
+        while not connections.initialized:
+            time.sleep(0.1)
+        return connections
 
 def format_value(x: float | list[float], decis = 1) -> str:
     result = "NaN"
