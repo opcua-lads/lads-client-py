@@ -1633,6 +1633,10 @@ class Connections:
         return connection
 
     @property
+    def urls(self) -> list[str]:
+        return list(map(lambda connection: connection.url, self.connections))
+
+    @property
     def initialized(self) -> bool:
         result = True
         for connection in self.connections:

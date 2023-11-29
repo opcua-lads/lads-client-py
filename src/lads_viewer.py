@@ -14,7 +14,7 @@ import time, math
 import matplotlib as plt
 import plotly.graph_objects as go
 from typing import Tuple
-from lads_client import AnalogScalarSensorFunctionWithCompensation, BaseStateMachineFunction, Connection, Connections, DiscreteControlFunction, DiscreteVariable, LADSNode, MultiStateDiscreteControlFunction, MultiStateDiscreteSensorFunction, TimerControlFunction
+from lads_client import AnalogScalarSensorFunctionWithCompensation, BaseStateMachineFunction, Connections, DiscreteControlFunction, DiscreteVariable, LADSNode, MultiStateDiscreteControlFunction, MultiStateDiscreteSensorFunction, TimerControlFunction
 from lads_client import TwoStateDiscreteControlFunction, TwoStateDiscreteSensorFunction, BaseVariable, AnalogItem, BaseControlFunction, Component, CoverFunction, Device, FunctionalUnit
 from lads_client import FunctionSet, Function, AnalogControlFunction, AnalogScalarSensorFunction, StartStopControlFunction, MulitModeControlFunction, StateMachine, AnalogControlFunctionWithTotalizer
 from asyncua import ua
@@ -27,8 +27,9 @@ def get_server_connections(config_file: str = "src/config.json") -> Connections:
     return connections
 
 def get_initialized_connections() -> Connections:
-    with st.spinner("Initializing OPC connections ..."):
-        connections = get_server_connections()
+    connections = get_server_connections()
+    urls = ", ".join(connections.urls)
+    with st.spinner(f"Initializing OPC connections '{urls}' ..."):
         while not connections.initialized:
             time.sleep(0.1)
         return connections
