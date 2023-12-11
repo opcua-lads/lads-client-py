@@ -311,13 +311,13 @@ def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
                 )
                 idx += 1
 
-def update_events(container, functional_unit: FunctionalUnit):
-    events = functional_unit.subscription_handler.events
+def update_events(container, device: Device):
+    events = device.subscription_handler.events
     if events is None:
         return
     if lastEventListUpdateKey not in st.session_state:
         st.session_state[lastEventListUpdateKey] = dt.datetime(2020, 1, 1)    
-    last_event_update = functional_unit.subscription_handler.last_event_update
+    last_event_update = device.subscription_handler.last_event_update
     last_event_list_update = st.session_state[lastEventListUpdateKey]
     if last_event_update == last_event_list_update:
         return
@@ -651,7 +651,7 @@ def main():
             st.write("**Events**")
             container_events = st.empty()
             empty(container_events)
-            update_events(container_events, selected_functional_unit)
+            update_events(container_events, selected_functional_unit.device)
             
         # update loop
         index = 5

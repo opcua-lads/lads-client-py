@@ -173,7 +173,7 @@ class Server(LADSTypes):
         for node in nodes:
             try:
                 await self.client.check_connection()
-                device: Device = await Device.propagate(node, self)
+                device: Device = await Device.promote(node, self)
                 await device.finalize_init()
                 self.devices.append(device)
             except Exception as error:
@@ -267,20 +267,24 @@ class SubscriptionHandler(object):
         self.event_node: LADSNode = node
         return await self.subscription.subscribe_events(node)        
  
-    def datachange_notification(self, node: Node, val: Any, data: DataChangeNotif):
+    async def datachange_notification(self, node: Node, val: Any, data: DataChangeNotif):
         try:
             variable: Node = self.subscribed_variables[node.nodeid]
             variable.data_change_notification(data)
         except Exception as error:
             _logger.error(f"datachange_notification error {error}")
 
-    def event_notification(self, event: Event):
+    async def event_notification(self, event: Event):
+        # obviously there is a bug in the library subscription.py
+        #   async def _call_event(self, eventlist: ua.EventNotificationList) -> None: 
+        # ua.EventNotificationList has always only one element, even if multiple events are sent..
         fields_dict = event.get_event_props_as_fields_dict()
         event_fields = {}
         try:
             event_fields = {k: variant_value_to_str(v) for k, v in fields_dict.items()}
         except Exception as error:
             _logger.error(error)
+        print(event_fields["Time"], event_fields["SourceName"], event_fields["Message"])
         key = pd.to_datetime(dt.datetime.now())
         if self.events is None:
             self.events = pd.DataFrame(event_fields, index = [key])
@@ -290,13 +294,13 @@ class SubscriptionHandler(object):
                 self.events = self.events.tail(-10)
         self.last_event_update = key
 
-    def status_change_notification(self, status: Any):
+    async def status_change_notification(self, status: Any):
         print(status)
 
 class LADSNode(Node):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(LADSNode, node, server.BaseObjectType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(LADSNode, node, server.BaseObjectType, server)
 
     def __str__(self):
         return f"{self.__class__.__name__}({self.display_name})"
@@ -366,19 +370,19 @@ class LADSNode(Node):
         return await self.get_child_or_none(ua.QualifiedName(name, self.server.ns_DI))
     
     async def get_di_variable(self, name : str) -> BaseVariable:
-        return await BaseVariable.propagate(await self.get_di_child(name), self.server)
+        return await BaseVariable.promote(await self.get_di_child(name), self.server)
     
     async def get_machinery_child(self, name : str) -> Node:
         return await self.get_child_or_none(ua.QualifiedName(name, self.server.ns_Machinery))
     
     async def get_machinery_variable(self, name : str) -> BaseVariable:
-        return await BaseVariable.propagate(await self.get_machinery_child(name), self.server)
+        return await BaseVariable.promote(await self.get_machinery_child(name), self.server)
     
     async def get_lads_child(self, name : str) -> Node:
         return await self.get_child_or_none(ua.QualifiedName(name, self.server.ns_LADS))
     
     async def get_lads_variable(self, name : str) -> BaseVariable:
-        return await BaseVariable.propagate(await self.get_lads_child(name), self.server)
+        return await BaseVariable.promote(await self.get_lads_child(name), self.server)
     
     async def get_child_objects(self, parent: Node = None) -> list[Node]:
         if parent is None: parent = self
@@ -401,8 +405,8 @@ class LADSNode(Node):
         
 class Method(LADSNode):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(Method, node, None, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(Method, node, None, server)
 
 class BaseVariable(LADSNode):
     subscription_level = SubscriptionLevel.Never
@@ -412,8 +416,8 @@ class BaseVariable(LADSNode):
     history: pd.DataFrame
 
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(BaseVariable, node, server.BaseVariableType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(BaseVariable, node, server.BaseVariableType, server)
 
     def __str__(self):
         return f"{super().__str__()} = {self.value}"
@@ -479,8 +483,8 @@ class BaseVariable(LADSNode):
 
 class SubscribedVariable(BaseVariable):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(SubscribedVariable, node, server.BaseVariableType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(SubscribedVariable, node, server.BaseVariableType, server)
     
     async def init(self, server: Server):
         await super().init(server)
@@ -489,8 +493,8 @@ class SubscribedVariable(BaseVariable):
 
 class NodeVersionVariable(SubscribedVariable):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(NodeVersionVariable, node, server.BaseVariableType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(NodeVersionVariable, node, server.BaseVariableType, server)
 
     async def init(self, server: Server):
         await super().init(server)
@@ -506,10 +510,10 @@ class StateVariable(SubscribedVariable):
     alternate_display_name: str = None
 
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        variable: StateVariable = await propagate_to(StateVariable, node, server.BaseVariableType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        variable: StateVariable = await promote_to(StateVariable, node, server.BaseVariableType, server)
         variable.subscription_level = SubscriptionLevel.Permanent
-        return await propagate_to(StateVariable, node, server.BaseVariableType, server)
+        return await promote_to(StateVariable, node, server.BaseVariableType, server)
 
     @property
     def value_str(self) -> str:
@@ -526,8 +530,8 @@ class StateVariable(SubscribedVariable):
 
 class AnalogItem(SubscribedVariable):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(AnalogItem, node, server.AnalogItemType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(AnalogItem, node, server.AnalogItemType, server)
 
     def __str__(self):
         return f"{super().__str__()} [{self.eu}]"
@@ -559,8 +563,8 @@ class Enumeration(SubscribedVariable):
     enum_strings: dict = {}
 
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(Enumeration, node, server.BaseVariableType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(Enumeration, node, server.BaseVariableType, server)
 
     def __str__(self):
         return f"{super().__str__()}\n  EnumStrings: {self.enum_strings}"
@@ -614,16 +618,16 @@ class TwoStateDiscrete(DiscreteVariable):
     false_state: BaseVariable
 
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(TwoStateDiscrete, node, server.TwoStateDiscreteType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(TwoStateDiscrete, node, server.TwoStateDiscreteType, server)
 
     def __str__(self):
         return f"{super().__str__()}\n  TrueState: {self.true_state.value_str}\n  FalseState: {self.false_state.value_str}"
     
     async def init(self, server: Server):
         await super().init(server)
-        self.true_state = await BaseVariable.propagate(await self.get_child("TrueState"), server)
-        self.false_state = await BaseVariable.propagate(await self.get_child("FalseState"), server)
+        self.true_state = await BaseVariable.promote(await self.get_child("TrueState"), server)
+        self.false_state = await BaseVariable.promote(await self.get_child("FalseState"), server)
 
     @property
     def value_str(self) -> str:
@@ -638,8 +642,8 @@ class TwoStateDiscrete(DiscreteVariable):
 
 class MultiStateDiscrete(DiscreteVariable):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(MultiStateDiscrete, node, server.MultiStateDiscreteType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(MultiStateDiscrete, node, server.MultiStateDiscreteType, server)
 
     def __str__(self):
         value: list[str] = self.enum_strings.data_value.Value.Value
@@ -648,7 +652,7 @@ class MultiStateDiscrete(DiscreteVariable):
     
     async def init(self, server: Server):
         await super().init(server)
-        self.enum_strings = await BaseVariable.propagate(await self.get_child("EnumStrings"), server)
+        self.enum_strings = await BaseVariable.promote(await self.get_child("EnumStrings"), server)
         assert(self.enum_strings.data_value.Value.is_array)
 
     @property
@@ -670,8 +674,8 @@ class LifetimeCounter(AnalogItem):
     warning_values: BaseVariable
 
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(LifetimeCounter, node, server.LifetimeVariableType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(LifetimeCounter, node, server.LifetimeVariableType, server)
 
     def __str__(self):
         return f"{super().__str__()}\n  {self.limit_value}\n  {self.start_value}"
@@ -688,15 +692,15 @@ class StateMachine(LADSNode):
     methods: list[Method] = []
     methods_dict: dict[str, Method]
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(StateMachine, node, server.FiniteStateMachineType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(StateMachine, node, server.FiniteStateMachineType, server)
 
     async def init(self, server: Server):
         await super().init(server)
-        self.current_state = await StateVariable.propagate(await self.get_child("CurrentState"), server)
+        self.current_state = await StateVariable.promote(await self.get_child("CurrentState"), server)
         self.current_state.alternate_display_name = self.display_name
         nodes = await self.get_methods()
-        self.methods = await asyncio.gather(*(Method.propagate(node, server) for node in nodes))
+        self.methods = await asyncio.gather(*(Method.promote(node, server) for node in nodes))
         self.methods_dict = {method.display_name: method for method in self.methods}
     
     @property
@@ -717,8 +721,8 @@ class StateMachine(LADSNode):
 
 class FunctionalStateMachine(StateMachine):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(FunctionalStateMachine, node, server.FiniteStateMachineType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(FunctionalStateMachine, node, server.FiniteStateMachineType, server)
     
     def start_program(self, program_template: str, properties: pd.DataFrame, supervisory_job_id: str, supervisory_task_id: str, samples: pd.DataFrame):
         key_value_list = None
@@ -759,8 +763,8 @@ class FunctionalStateMachine(StateMachine):
 
 class LADSSet(LADSNode):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(LADSSet, node, server.SetType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(LADSSet, node, server.SetType, server)
     
     node_version: NodeVersionVariable = None
     children: list[Node] = []
@@ -772,25 +776,25 @@ class LADSSet(LADSNode):
         try:
             # node_version variable is optional
             node_version = await self.get_child("NodeVersion")
-            self.node_version = await NodeVersionVariable.propagate(node_version, server)
+            self.node_version = await NodeVersionVariable.promote(node_version, server)
             self.node_version.set = self
         except Exception as error:
             pass
             # _logger.warning(error)
         self.children = await self.get_child_objects()
 
-    async def propagate_children(self, child_class: Type, child_type: Node, set_type: Node):
+    async def promote_children(self, child_class: Type, child_type: Node, set_type: Node):
         if self.children is None: 
             return
         if set_type is not None:
             assert(await is_of_type(self.server, self, set_type))
         self.child_class = child_class
         self.child_type = child_type
-        self.children = await asyncio.gather(*(self.propagate_child(child) for child in self.children))
+        self.children = await asyncio.gather(*(self.promote_child(child) for child in self.children))
         self.children.sort(key = lambda child: child.display_name)
 
-    async def propagate_child(self, child: Node) -> LADSNode:
-        return await propagate_to(self.child_class, child, self.child_type, self.server)
+    async def promote_child(self, child: Node) -> LADSNode:
+        return await promote_to(self.child_class, child, self.child_type, self.server)
     
     @property
     def variables(self) ->list[BaseVariable]:
@@ -810,7 +814,7 @@ class LADSSet(LADSNode):
             for node_id in new_node_ids:
                 nodes = list(filter(lambda node: node.nodeid == node_id, current_nodes))
                 assert(len(nodes) == 1)
-                node = await self.propagate_child(nodes[0])
+                node = await self.promote_child(nodes[0])
                 self.children.append(node)
         if len(deleted_node_ids) > 0:
             for node_id in deleted_node_ids:
@@ -822,8 +826,8 @@ class LADSSet(LADSNode):
 class ComponentSet(LADSSet):
     # since the Machinery type Components is not derived from LADS.SetType with meed a different type check
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(ComponentSet, node, server.ComponentSetType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(ComponentSet, node, server.ComponentSetType, server)
     
 class OperationCounters(LADSNode):
     operation_cycle_counter: BaseVariable
@@ -831,8 +835,8 @@ class OperationCounters(LADSNode):
     power_on_duration: BaseVariable
 
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(OperationCounters, node, server.MachineryOperationCounterType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(OperationCounters, node, server.MachineryOperationCounterType, server)
     
     async def init(self, server: Server):
         await super().init(server)
@@ -850,13 +854,13 @@ class OperationCounters(LADSNode):
 
 class LifetimeCounters(LADSNode):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(LifetimeCounters, node, server.MachineryLifeTimeCounterType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(LifetimeCounters, node, server.MachineryLifeTimeCounterType, server)
         
     async def init(self, server: Server):
         await super().init(server)
         nodes = await get_properties_and_variables(self)
-        self.lifetime_counters: list[LifetimeCounter] = await asyncio.gather(*(LifetimeCounter.propagate(node, server) for node in nodes))
+        self.lifetime_counters: list[LifetimeCounter] = await asyncio.gather(*(LifetimeCounter.promote(node, server) for node in nodes))
         self.lifetime_counters.sort(key = lambda node: node.display_name)
 
     @property
@@ -869,8 +873,8 @@ class Identification(LADSNode):
     location: BaseVariable
 
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(Identification, node, server.MachineryItemIdentificationType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(Identification, node, server.MachineryItemIdentificationType, server)
     
     async def init(self, server: Server):
         await super().init(server)
@@ -895,8 +899,8 @@ class Component(LADSNode):
     identification: Identification = None
 
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(Component, node, server.ComponentType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(Component, node, server.ComponentType, server)
     
     async def init(self, server: Server):
         await super().init(server)
@@ -904,13 +908,13 @@ class Component(LADSNode):
         self._variables.sort(key = lambda variable: variable.display_name)
         self.device_health = self.variable_named("DeviceHealth")
         if self.device_health is not None:
-            self.device_health = await Enumeration.propagate(self.device_health, server)
-        self.component_set = await ComponentSet.propagate(await self.get_machinery_child("Components"), server)
+            self.device_health = await Enumeration.promote(self.device_health, server)
+        self.component_set = await ComponentSet.promote(await self.get_machinery_child("Components"), server)
         if self.component_set is not None:
-            await self.component_set.propagate_children(Component, server.ComponentType, server.ComponentSetType)
-        self.operation_counters = await OperationCounters.propagate(await self.get_di_child("OperationCounters"), server)
-        self.lifetime_counter_set = await LifetimeCounters.propagate(await self.get_machinery_child("LifetimeCounters"), server)
-        self.identification = await Identification.propagate(await self.get_di_child("Identification"), server)
+            await self.component_set.promote_children(Component, server.ComponentType, server.ComponentSetType)
+        self.operation_counters = await OperationCounters.promote(await self.get_di_child("OperationCounters"), server)
+        self.lifetime_counter_set = await LifetimeCounters.promote(await self.get_machinery_child("LifetimeCounters"), server)
+        self.identification = await Identification.promote(await self.get_di_child("Identification"), server)
 
     @property
     def components(self) -> list[Component]:
@@ -930,8 +934,8 @@ class Component(LADSNode):
 
 class Device(Component):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(Device, node, server.DeviceType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(Device, node, server.DeviceType, server)
     
     device_state: StateMachine
     machinery_item_state: StateMachine
@@ -945,11 +949,11 @@ class Device(Component):
         await super().init(server)
         functional_unit_set = await self.get_lads_child("FunctionalUnitSet")
         nodes = await self.get_child_objects(functional_unit_set)
-        self.functional_units: list[FunctionalUnit] = await asyncio.gather(*(FunctionalUnit.propagate(node, server) for node in nodes))
+        self.functional_units: list[FunctionalUnit] = await asyncio.gather(*(FunctionalUnit.promote(node, server) for node in nodes))
         self.device_state, self.machinery_item_state, self.machinery_operation_mode = await asyncio.gather(
-            StateMachine.propagate(await self.get_lads_child("DeviceState"), server),
-            StateMachine.propagate(await self.get_machinery_child("MachineryItemState"), server),
-            StateMachine.propagate(await self.get_machinery_child("MachineryOperationMode"), server),
+            StateMachine.promote(await self.get_lads_child("DeviceState"), server),
+            StateMachine.promote(await self.get_machinery_child("MachineryItemState"), server),
+            StateMachine.promote(await self.get_machinery_child("MachineryOperationMode"), server),
         )
         state_machines: list[StateMachine] = remove_none([self.device_state, self.machinery_item_state, self.machinery_operation_mode])
         self.state_machine_variables = list(map(lambda state_machine: state_machine.current_state, state_machines))
@@ -1014,16 +1018,16 @@ class Device(Component):
 class Function(LADSNode):
     functional_parent: LADSNode = None
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(Function, node, server.FunctionType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(Function, node, server.FunctionType, server)
     
     async def init(self, server: Server):
         await super().init(server)
         node = await self.get_lads_child("IsEnabled")
-        self.is_enabled = await BaseVariable.propagate(node, server)
+        self.is_enabled = await BaseVariable.promote(node, server)
         self.function_set: FunctionSet = await self.get_lads_child("FunctionSet")
         if self.function_set is not None:
-            self.function_set = await FunctionSet.propagate(self.function_set, server)
+            self.function_set = await FunctionSet.promote(self.function_set, server)
 
     async def finalize_init(self, functional_parent: LADSNode):
         await super().finalize_init()
@@ -1056,51 +1060,50 @@ class Function(LADSNode):
 
 class FunctionSet(LADSSet):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(FunctionSet, node, server.FunctionSetType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(FunctionSet, node, server.FunctionSetType, server)
     
     async def init(self, server: Server):
         await super().init(server)
-        self.functions: list[Function] = await asyncio.gather(*(self.propagate_child(child) for child in self.children))
+        self.functions: list[Function] = await asyncio.gather(*(self.promote_child(child) for child in self.children))
         self.functions.sort(key = lambda function: function.display_name)
 
     async def finalize_init(self, functional_parent: LADSNode):
         await asyncio.gather(*(function.finalize_init(functional_parent) for function in self.functions))
         
-
-    async def propagate_child(self, child: Node) -> Function:
+    async def promote_child(self, child: Node) -> Function:
         server = self.server
         types = await browse_types(server, child)
         try:
             function: Function = None
             if server.AnalogControlFunctionWithTotalizerType in types:
-                function = await AnalogControlFunctionWithTotalizer.propagate(child, server)
+                function = await AnalogControlFunctionWithTotalizer.promote(child, server)
             elif server.AnalogControlFunctionType in types:
-                function = await AnalogControlFunction.propagate(child, server)
+                function = await AnalogControlFunction.promote(child, server)
             elif server.TimerControlFunctionType in types:
-                function = await TimerControlFunction.propagate(child, server)
+                function = await TimerControlFunction.promote(child, server)
             elif server.AnalogScalarSensorFunctionWithCompensationType in types:
-                function = await AnalogScalarSensorFunctionWithCompensation.propagate(child, server)
+                function = await AnalogScalarSensorFunctionWithCompensation.promote(child, server)
             elif server.AnalogScalarSensorFunctionType in types:
-                function = await AnalogScalarSensorFunction.propagate(child, server)
+                function = await AnalogScalarSensorFunction.promote(child, server)
             elif server.AnalogArraySensorFunctionType in types:
-                function = await AnalogArraySensorFunction.propagate(child, server)
+                function = await AnalogArraySensorFunction.promote(child, server)
             elif server.TwoStateDiscreteSensorFunctionType in types:
-                function = await TwoStateDiscreteSensorFunction.propagate(child, server)
+                function = await TwoStateDiscreteSensorFunction.promote(child, server)
             elif server.MultiStateDiscreteSensorFunctionType in types:
-                function = await MultiStateDiscreteSensorFunction.propagate(child, server)
+                function = await MultiStateDiscreteSensorFunction.promote(child, server)
             elif server.CoverFunctionType in types:
-                function = await CoverFunction.propagate(child, server)
+                function = await CoverFunction.promote(child, server)
             elif server.StartStopControlFunctionType in types:
-                function = await StartStopControlFunction.propagate(child, server)
+                function = await StartStopControlFunction.promote(child, server)
             elif server.TwoStateDiscreteControlFunctionType in types:
-                function = await TwoStateDiscreteControlFunction.propagate(child, server)
+                function = await TwoStateDiscreteControlFunction.promote(child, server)
             elif server.MultiStateDiscreteControlFunctionType in types:
-                function = await MultiStateDiscreteControlFunction.propagate(child, server)
+                function = await MultiStateDiscreteControlFunction.promote(child, server)
             elif server.MultiModeControlFunctionType in types:
-                function = await MulitModeControlFunction.propagate(child, server)
+                function = await MulitModeControlFunction.promote(child, server)
             else:
-                function = await Function.propagate(child, server)
+                function = await Function.promote(child, server)
         except Exception as error:
             _logger.error(error)
         return function
@@ -1114,8 +1117,8 @@ class FunctionSet(LADSSet):
 
 class ProgramTemplate(LADSNode):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(ProgramTemplate, node, server.ProgramTemplateType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(ProgramTemplate, node, server.ProgramTemplateType, server)
 
     async def init(self, server: Server):
         await super().init(server)
@@ -1128,8 +1131,8 @@ class ProgramTemplate(LADSNode):
 
 class Result(LADSNode):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(Result, node, server.ResultType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(Result, node, server.ResultType, server)
 
     async def init(self, server: Server):
         await super().init(server)
@@ -1154,8 +1157,8 @@ class ActiveProgram(LADSNode):
     _variables: list[BaseVariable]
 
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(ActiveProgram, node, server.ActiveProgramType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(ActiveProgram, node, server.ActiveProgramType, server)
 
     def find_variable(self, name: str) -> BaseVariable:
         if self._variables is None:
@@ -1212,16 +1215,16 @@ class ProgramManager(LADSNode):
     active_program: ActiveProgram
 
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(ProgramManager, node, server.ProgramManagerType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(ProgramManager, node, server.ProgramManagerType, server)
 
     async def init(self, server: Server):
         await super().init(server)
-        self.program_template_set = await LADSSet.propagate(await self.get_lads_child("ProgramTemplateSet"), server)
-        self.result_set = await LADSSet.propagate(await self.get_lads_child("ResultSet"), server)
-        await self.program_template_set.propagate_children(ProgramTemplate, server.ProgramTemplateType, server.ProgramTemplateSetType)
-        await self.result_set.propagate_children(Result, server.ResultType, server.ResultSetType)
-        self.active_program = await ActiveProgram.propagate(await self.get_lads_child("ActiveProgram"), server)
+        self.program_template_set = await LADSSet.promote(await self.get_lads_child("ProgramTemplateSet"), server)
+        self.result_set = await LADSSet.promote(await self.get_lads_child("ResultSet"), server)
+        await self.program_template_set.promote_children(ProgramTemplate, server.ProgramTemplateType, server.ProgramTemplateSetType)
+        await self.result_set.promote_children(Result, server.ResultType, server.ResultSetType)
+        self.active_program = await ActiveProgram.promote(await self.get_lads_child("ActiveProgram"), server)
 
     @property
     def variables(self) ->list[BaseVariable]:
@@ -1241,8 +1244,8 @@ class ProgramManager(LADSNode):
     
 class FunctionalUnit(LADSNode):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(FunctionalUnit, node, server.FunctionalUnitType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(FunctionalUnit, node, server.FunctionalUnitType, server)
     
     functional_unit_state: FunctionalStateMachine
     function_set: FunctionSet
@@ -1251,9 +1254,9 @@ class FunctionalUnit(LADSNode):
     async def init(self, server: Server):
         await super().init(server)
         self.function_set, self.functional_unit_state, self.program_manager = await asyncio.gather(
-            FunctionSet.propagate(await self.get_lads_child("FunctionSet"), server),
-            FunctionalStateMachine.propagate(await self.get_lads_child("FunctionalUnitState"), server),
-            ProgramManager.propagate(await self.get_lads_child("ProgramManager"), server),
+            FunctionSet.promote(await self.get_lads_child("FunctionSet"), server),
+            FunctionalStateMachine.promote(await self.get_lads_child("FunctionalUnitState"), server),
+            ProgramManager.promote(await self.get_lads_child("ProgramManager"), server),
         )
 
     async def finalize_init(self, device: Device):
@@ -1262,9 +1265,13 @@ class FunctionalUnit(LADSNode):
         if self.function_set is not None:
             await self.function_set.finalize_init(self)
         # prepare subscriptions (data change will be handled by device)
-        self.subscription_handler = SubscriptionHandler()
-        events_handler = await self.subscription_handler.subscribe_events(self.server, self)
+        # self.subscription_handler = SubscriptionHandler()
+        # events_handler = await self.subscription_handler.subscribe_events(self.server, self)
 
+    @property 
+    def subscription_handler(self) -> SubscriptionHandler:
+        return self.device.subscription_handler
+    
     @property
     def all_subscribed_variables(self) -> list[BaseVariable]:
         variables = self.subscribed_variables + self.functional_unit_state.variables
@@ -1321,7 +1328,7 @@ class BaseControlFunction(BaseStateMachineFunction):
 
     async def init(self, server: Server):
         await super().init(server)
-        self.control_function_state = await FunctionalStateMachine.propagate(await self.get_lads_child("ControlFunctionState"), server)
+        self.control_function_state = await FunctionalStateMachine.promote(await self.get_lads_child("ControlFunctionState"), server)
 
     @property
     def state_machine(self) -> StateMachine:
@@ -1329,8 +1336,8 @@ class BaseControlFunction(BaseStateMachineFunction):
 
 class StartStopControlFunction(BaseControlFunction):#
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(StartStopControlFunction, node, server.StartStopControlFunctionType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(StartStopControlFunction, node, server.StartStopControlFunctionType, server)
     
 class BaseSensorFunction(Function):
     sensor_value = None
@@ -1344,8 +1351,8 @@ class BaseSensorFunction(Function):
     
 class AnalogScalarSensorFunction(BaseSensorFunction):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(AnalogScalarSensorFunction, node, server.AnalogScalarSensorFunctionType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(AnalogScalarSensorFunction, node, server.AnalogScalarSensorFunctionType, server)
 
     async def init(self, server: Server):
         await super().init(server)        
@@ -1353,8 +1360,8 @@ class AnalogScalarSensorFunction(BaseSensorFunction):
 
 class AnalogScalarSensorFunctionWithCompensation(AnalogScalarSensorFunction):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(AnalogScalarSensorFunctionWithCompensation, node, server.AnalogScalarSensorFunctionWithCompensationType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(AnalogScalarSensorFunctionWithCompensation, node, server.AnalogScalarSensorFunctionWithCompensationType, server)
 
     async def init(self, server: Server):
         await super().init(server)        
@@ -1362,13 +1369,13 @@ class AnalogScalarSensorFunctionWithCompensation(AnalogScalarSensorFunction):
 
 class AnalogArraySensorFunction(AnalogScalarSensorFunction):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(AnalogArraySensorFunction, node, server.AnalogArraySensorFunctionType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(AnalogArraySensorFunction, node, server.AnalogArraySensorFunctionType, server)
 
 class TwoStateDiscreteSensorFunction(BaseSensorFunction):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(TwoStateDiscreteSensorFunction, node, server.TwoStateDiscreteSensorFunctionType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(TwoStateDiscreteSensorFunction, node, server.TwoStateDiscreteSensorFunctionType, server)
 
     async def init(self, server: Server):
         await super().init(server)        
@@ -1376,8 +1383,8 @@ class TwoStateDiscreteSensorFunction(BaseSensorFunction):
 
 class MultiStateDiscreteSensorFunction(BaseSensorFunction):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(MultiStateDiscreteSensorFunction, node, server.TwoStateDiscreteSensorFunctionType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(MultiStateDiscreteSensorFunction, node, server.TwoStateDiscreteSensorFunctionType, server)
 
     async def init(self, server: Server):
         await super().init(server)        
@@ -1393,8 +1400,8 @@ class BaseAnalogDiscreteControlFunction(BaseControlFunction):
     
 class AnalogControlFunction(BaseAnalogDiscreteControlFunction):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(AnalogControlFunction, node, server.AnalogControlFunctionType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(AnalogControlFunction, node, server.AnalogControlFunctionType, server)
 
     async def init(self, server: Server):
         await super().init(server)        
@@ -1403,8 +1410,8 @@ class AnalogControlFunction(BaseAnalogDiscreteControlFunction):
 
 class AnalogControlFunctionWithTotalizer(AnalogControlFunction):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(AnalogControlFunctionWithTotalizer, node, server.AnalogControlFunctionWithTotalizerType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(AnalogControlFunctionWithTotalizer, node, server.AnalogControlFunctionWithTotalizerType, server)
 
     def __str__(self):
         return f"{super().__str__()}\n  {self.totalized_value}"
@@ -1422,8 +1429,8 @@ class TimerControlFunction(AnalogControlFunction):
         return f"{super().__str__()}\n  {self.difference_value}"
     
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(TimerControlFunction, node, server.TimerControlFunctionType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(TimerControlFunction, node, server.TimerControlFunctionType, server)
 
     async def init(self, server: Server):
         await super().init(server)        
@@ -1439,8 +1446,8 @@ class DiscreteControlFunction(BaseAnalogDiscreteControlFunction):
 
 class TwoStateDiscreteControlFunction(DiscreteControlFunction):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(TwoStateDiscreteControlFunction, node, server.TwoStateDiscreteControlFunctionType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(TwoStateDiscreteControlFunction, node, server.TwoStateDiscreteControlFunctionType, server)
 
     async def init(self, server: Server):
         await super().init(server)        
@@ -1449,8 +1456,8 @@ class TwoStateDiscreteControlFunction(DiscreteControlFunction):
 
 class MultiStateDiscreteControlFunction(DiscreteControlFunction):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(MultiStateDiscreteControlFunction, node, server.MultiStateDiscreteControlFunctionType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(MultiStateDiscreteControlFunction, node, server.MultiStateDiscreteControlFunctionType, server)
 
     async def init(self, server: Server):
         await super().init(server)        
@@ -1459,8 +1466,8 @@ class MultiStateDiscreteControlFunction(DiscreteControlFunction):
 
 class ControllerParameter(LADSNode):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(ControllerParameter, node, server.ControllerParameterType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(ControllerParameter, node, server.ControllerParameterType, server)
 
     def __str__(self):
         return f"  {super().__str__()}\n    {self.current_value}\n    {self.target_value}"
@@ -1476,18 +1483,18 @@ class ControllerParameter(LADSNode):
 
 class ControllerParameterSet(LADSSet):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(ControllerParameterSet, node, server.ControllerParameterSetType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(ControllerParameterSet, node, server.ControllerParameterSetType, server)
 
     async def init(self, server: Server):
         await super().init(server)
-        self.controller_parameters: list[ControllerParameter] = await asyncio.gather(*(ControllerParameter.propagate(child, server) for child in self.children))
+        self.controller_parameters: list[ControllerParameter] = await asyncio.gather(*(ControllerParameter.promote(child, server) for child in self.children))
         self.controller_parameters.sort(key = lambda node: node.display_name)
 
 class MulitModeControlFunction(BaseControlFunction):
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(MulitModeControlFunction, node, server.MultiModeControlFunctionType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(MulitModeControlFunction, node, server.MultiModeControlFunctionType, server)
 
     def __str__(self):
         s = ""
@@ -1497,8 +1504,8 @@ class MulitModeControlFunction(BaseControlFunction):
     
     async def init(self, server: Server):
         await super().init(server)
-        self.current_mode = await MultiStateDiscrete.propagate(await self.get_lads_child("CurrentMode"), server)
-        self.controller_mode_set = await ControllerParameterSet.propagate(await self.get_lads_child("ControllerModeSet"), server)
+        self.current_mode = await MultiStateDiscrete.promote(await self.get_lads_child("CurrentMode"), server)
+        self.controller_mode_set = await ControllerParameterSet.promote(await self.get_lads_child("ControllerModeSet"), server)
 
     @property
     def controller_parameters(self) -> list[ControllerParameter]:
@@ -1520,47 +1527,47 @@ class CoverFunction(BaseStateMachineFunction):
     cover_state: StateMachine = None
 
     @classmethod
-    async def propagate(cls, node: Node, server: Server) -> Self:
-        return await propagate_to(CoverFunction, node, server.CoverFunctionType, server)
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(CoverFunction, node, server.CoverFunctionType, server)
 
     async def init(self, server: Server):
         await super().init(server)
-        self.cover_state = await FunctionalStateMachine.propagate(await self.get_lads_child("CoverState"), server)
+        self.cover_state = await FunctionalStateMachine.promote(await self.get_lads_child("CoverState"), server)
 
     @property
     def state_machine(self) -> StateMachine:
         return self.cover_state
 
-async def propagate_to(cls: Type, node: Node, type_node: Node, server: Server) -> LADSNode:
+async def promote_to(cls: Type, node: Node, type_node: Node, server: Server) -> LADSNode:
     if node is None: return None
     node_class = await node.read_node_class()
     if node_class != ua.NodeClass.Method:
         assert await is_of_type(server, node, type_node), f"node {node.nodeid} is expexted to be of type {type_node.nodeid}"
     node.__class__ = cls
-    propagated_node : cls = node
-    await propagated_node.init(server)
-    return propagated_node
+    promoted_node : cls = node
+    await promoted_node.init(server)
+    return promoted_node
 
 async def get_lads_analog_item(parent: LADSNode, name: str) -> AnalogItem:
     node = await parent.get_lads_child(name)
-    return await AnalogItem.propagate(node, parent.server)
+    return await AnalogItem.promote(node, parent.server)
 
 async def get_lads_two_state_discrete(parent: LADSNode, name: str) -> TwoStateDiscrete:
     node = await parent.get_lads_child(name)
-    return await TwoStateDiscrete.propagate(node, parent.server)
+    return await TwoStateDiscrete.promote(node, parent.server)
 
 async def get_lads_multi_state_discrete(parent: LADSNode, name: str) -> MultiStateDiscrete:
     node = await parent.get_lads_child(name)
-    return await MultiStateDiscrete.propagate(node, parent.server)
+    return await MultiStateDiscrete.promote(node, parent.server)
 
 async def get_di_variable(parent: LADSNode, name: str) -> BaseVariable:
-    return await BaseVariable.propagate(await parent.get_di_child(name), parent.server)
+    return await BaseVariable.promote(await parent.get_di_child(name), parent.server)
 
 async def get_properties_and_variables(node: LADSNode) -> list[BaseVariable]:
     
     (variables, properties) = await asyncio.gather(node.get_variables(), node.get_properties())
     variables.extend(properties)
-    result: list[BaseVariable] = await asyncio.gather(*(BaseVariable.propagate(variable, node.server) for variable in variables))
+    result: list[BaseVariable] = await asyncio.gather(*(BaseVariable.promote(variable, node.server) for variable in variables))
     return result
 
 DefaultServerUrl = "opc.tcp://localhost:26543"
@@ -1591,7 +1598,7 @@ class Connection:
     async def _run_connection_async(self):
         running = True
         # run loop
-        while running:
+        while running: 
             self.client = Client(self.url)            
             self.server = Server(self.client)
             try:
@@ -1601,7 +1608,7 @@ class Connection:
                     while self.server.running:
                         await self.server.evaluate()
                         await self.client.check_connection()
-            except (ConnectionError, ua.UaError) as error:
+            except (TimeoutError, ConnectionError, ua.UaError) as error:
                 _logger.warning(f"Reconnecting in 2 seconds: {error}")
                 await asyncio.sleep(2)
             except Exception as error:
