@@ -60,6 +60,7 @@ class LADSObjectIds(IntEnum):
     ActiveProgramType = 1040
     ResultSetType = 1020
     ResultType = 1021
+    VariableSetType = 1041
 
 class MachineryObjectIds(IntEnum):
     """Machinery specfic numerical node-ids"""
@@ -129,6 +130,7 @@ class LADSTypes:
         self.ActiveProgramType = self.get_lads_node(LADSObjectIds.ActiveProgramType)
         self.ResultSetType = self.get_lads_node(LADSObjectIds.ResultSetType)
         self.ResultType = self.get_lads_node(LADSObjectIds.ResultType)
+        self.VariableSetType = self.get_lads_node(LADSObjectIds.VariableSetType)
 
         # read data tyoes only once - asyncua design problem..
         if Connection.data_types is None:
@@ -202,6 +204,8 @@ class Server(LADSTypes):
         return functional_units
     
 async def get_parent_nodes(server: Server, node: Node, root_node: Node = None) -> list[Node]:
+    if node is None:
+        return[]
     parent = await node.get_parent()
     if parent == root_node:
         return [parent]
@@ -218,7 +222,10 @@ async def browse_types(server: Server, node: Node) -> list[Node]:
         root_node = server.BaseVariableType
     else:
         root_node = server.BaseObjectType
-    return [type_node] + await get_parent_nodes(server, type_node, root_node)
+    if type_node == root_node:
+        return [type_node]    
+    else:
+        return [type_node] + await get_parent_nodes(server, type_node, root_node)
 
 async def is_of_type(server: Server, node: Node, type_node: Node) -> bool:
     types = await browse_types(server, node)
@@ -409,6 +416,7 @@ class Method(LADSNode):
         return await promote_to(Method, node, None, server)
 
 class BaseVariable(LADSNode):
+    alternate_display_name: str = None
     subscription_level = SubscriptionLevel.Never
     data_value: ua.DataValue
     data_type: ua.VariantType
@@ -434,6 +442,13 @@ class BaseVariable(LADSNode):
         if (historizing.Value.Value):
             self.subscription_level = SubscriptionLevel.Permanent
             self.history = pd.DataFrame({f"{self.display_name}": [self.value]}, index = [pd.to_datetime(self.data_value.SourceTimestamp)])
+
+    @property
+    def display_name(self) -> str:
+        if self.alternate_display_name is not None:
+            return self.alternate_display_name
+        else:
+            return super().display_name
 
     def set_value(self, value: Any) -> ua.StatusCode:
         if self.has_write_access:
@@ -521,13 +536,6 @@ class StateVariable(SubscribedVariable):
         l = s.split(":")
         return s if len(l) < 2 else l[1]
     
-    @property
-    def display_name(self) -> str:
-        if self.alternate_display_name is not None:
-            return self.alternate_display_name
-        else:
-            return super().display_name
-
 class AnalogItem(SubscribedVariable):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -824,7 +832,7 @@ class LADSSet(LADSNode):
                 self.children.remove(node)
         
 class ComponentSet(LADSSet):
-    # since the Machinery type Components is not derived from LADS.SetType with meed a different type check
+    # since the Machinery type Components is not derived from LADS.SetType we need a different type check
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(ComponentSet, node, server.ComponentSetType, server)
@@ -1129,7 +1137,35 @@ class ProgramTemplate(LADSNode):
     def variables(self) ->list[BaseVariable]:
         return self._variables
 
+class VariableSet(LADSSet):
+    @classmethod
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(VariableSet, node, server.VariableSetType, server)
+    
+    async def init(self, server: Server):
+        await super().init(server)
+        self._variables: list[BaseVariable] = []
+        await self.collect_variables(self)
+
+    async def collect_variables(self, lads_node: LADSNode, path: str = ""):
+        # collect variables and properties of current node
+        variables = await get_properties_and_variables(lads_node)
+        for variable in variables:
+            if not "NodeVersion" in variable.display_name:
+                variable.alternate_display_name = unique_name_delimiter.join([path, variable.display_name])
+                self._variables.append(variable)
+        # recurse objects if any
+        nodes = await self.get_child_objects(lads_node)
+        for node in nodes:
+            parent = await LADSNode.promote(node, self.server)
+            await self.collect_variables(parent, unique_name_delimiter.join([path, parent.display_name]))
+
+    @property
+    def variables(self) -> list[BaseVariable]:
+        return self._variables
+
 class Result(LADSNode):
+    variable_set: VariableSet
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(Result, node, server.ResultType, server)
@@ -1138,6 +1174,14 @@ class Result(LADSNode):
         await super().init(server)
         self._variables = await get_properties_and_variables(self)
         self._variables.sort(key = lambda variable: variable.display_name)
+        self.variable_set = await VariableSet.promote(await self.get_lads_child("VariableSet"), self.server)
+
+    def update(self):
+        self.call_async(self.update_async())
+
+    async def update_async(self):
+        await self.update_variables_async()
+        self.variable_set = await VariableSet.promote(await self.get_lads_child("VariableSet"), self.server)
 
     @property
     def variables(self) ->list[BaseVariable]:
@@ -1578,10 +1622,12 @@ import json
 class Connection:
     data_types: dict = None
 
-    def __init__(self, url = DefaultServerUrl) -> None:
+    def __init__(self, url = DefaultServerUrl, user: str = None, password: str = None) -> None:
         self.client: Client = None
         self.server: Server = None
         self.url = url
+        self.user = user
+        self.password = password
         self.thread = threading.Thread(target=self._run_connection, daemon=True, name=f"LADS OPC UA Connection {url}")
         self.thread.start()
 
@@ -1601,6 +1647,9 @@ class Connection:
         while running: 
             self.client = Client(self.url)            
             self.server = Server(self.client)
+            if (self.user is not None) and (self.password is not None):
+                self.client.set_user(self.user)
+                self.client.set_password(self.password)
             try:
                 async with self.client:
                     await self.server.init()
@@ -1619,6 +1668,12 @@ class Connection:
                 await self.client.disconnect()
                 _logger.warning("disconnected")
 
+def get_value(data: dict, key: str) -> any:
+    if key in data:
+        return data[key]
+    else:
+        return None
+
 class Connections:
     connections: list[Connection] = []
 
@@ -1627,15 +1682,19 @@ class Connections:
             with open(config_file) as f:
                 print(f"parsing config file {config_file}")
                 data = json.load(f)
-                for connection in data['connections']:
+                for connection in data["connections"]:
                     url = connection["url"]
-                    print(f"Add conncetion with url {url}")
-                    self.add(url)
+                    user = get_value(connection, "user") 
+                    password = get_value(connection, "password")
+                    enabled = get_value(connection, "enabled") if not None else True
+                    if enabled:
+                        print(f"Add conncetion with url {url}")
+                        self.add(url, user, password)
         except Exception as error:
             _logger.error(f"Invalid config file {config_file}: {error}")
 
-    def add(self, url: str) -> Connection:
-        connection = Connection(url)
+    def add(self, url: str, user: str = None, password: str = None) -> Connection:
+        connection = Connection(url, user, password)
         self.connections.append(connection)
         return connection
 

@@ -1,10 +1,12 @@
 {
     "connections": [
         {
-            "url": "opc.tcp://localhost:26543"
+            "url": "opc.tcp://localhost:26543",
+            "enabled": true
         },
         {
-            "url": "opc.tcp://localhost:26543"
+            "url": "opc.tcp://localhost:26544",
+            "enabled": true
         }
     ]
 }

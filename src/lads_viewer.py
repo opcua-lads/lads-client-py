@@ -558,9 +558,8 @@ def update_active_program(progress_container, functional_unit: FunctionalUnit) -
 
     # update result once run is finished
     if "Stopped" in current_state and "Running" in previous_state:
-        print("updating last result")
         try:
-            program_manager.results[-1].update_variables()
+            program_manager.results[-1].update()
         except:
             pass
 
@@ -573,6 +572,10 @@ def update_result_set(container, functional_unit: FunctionalUnit):
         for result in program_manager.results:
             with st.expander(result.display_name, expanded=False):
                 show_variables_table(result.variables)
+                if len(result.variable_set.variables) > 0:
+                    st.write("Result data")
+                    show_variables_table(result.variable_set.variables)
+
 
 selectedFunctionalUnitKey = "selected_functional_unit"
 lastEventListUpdateKey = "last_event_list_update"
