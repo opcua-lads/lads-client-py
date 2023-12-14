@@ -5,6 +5,10 @@
             "enabled": true
         },
         {
+            "url": "opc.tcp://localhost:4840/LADSServer",
+            "enabled": true
+        },
+        {
             "url": "opc.tcp://localhost:26544",
             "enabled": true
         }

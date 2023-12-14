@@ -427,7 +427,7 @@ def update_asset_management(container_device, container_map, container_component
             if location is not None:
                 lat.append(location[0])
                 lon.append(location[1])
-                size.append(1000 if dev == device else 500)
+                size.append(10000 if dev == device else 5000)
                 color.append("#ff4400" if dev is device else "#0044ff")
         if len(lat) > 0:
             df = pd.DataFrame({
@@ -436,7 +436,7 @@ def update_asset_management(container_device, container_map, container_component
                 "size": size,
                 "color": color,
                 })
-            st.map(df, zoom=6, use_container_width=True)
+            st.map(df, zoom=8, use_container_width=True)
     with container_components.container():
         show_components(device, expanded_count=1)
 
@@ -456,9 +456,9 @@ def show_components(component: Component, expanded_count):
                 # show_variables_table(component.lifetime_counters)
                 for counter in component.lifetime_counters:
                     try:
-                        value = float(counter.value)
-                        start = float(counter.start_value.value)
-                        limit = float(counter.limit_value.value)
+                        value = to_float(counter.value, default=0.0)
+                        start = to_float(counter.start_value.value, default=0.0)
+                        limit = to_float(counter.limit_value.value, default=0.0)
                         eu = counter.eu
                         warning = False if counter.warning_values is None else any(value < float(warning_value) for warning_value in counter.warning_values.value)
                         color = "red" if warning else "green"
@@ -531,6 +531,13 @@ def show_active_program(container, functional_unit: FunctionalUnit) -> any:
     update_active_program(progress_container, functional_unit)
     return progress_container
 
+def to_float(value, default: float = float("nan")) -> float:
+    try:
+        result = float(value)
+    except:
+        result = default
+    return result
+
 def update_active_program(progress_container, functional_unit: FunctionalUnit) -> bool:
     current_state_var = functional_unit.current_state
     current_state = current_state_var.value_str
@@ -547,12 +554,12 @@ def update_active_program(progress_container, functional_unit: FunctionalUnit) -
                 active_program = program_manager.active_program
                 if active_program.has_progress:
                     st.progress(active_program.current_progress, "Program run progress")
-                    st.write(f"{0.001 * float(active_program.current_runtime.value)}s / {0.001 * float(active_program.estimated_runtime.value)}s")
+                    st.write(f"{0.001 * to_float(active_program.current_runtime.value)}s / {0.001 * to_float(active_program.estimated_runtime.value)}s")
                 if active_program.has_step_progress:
                     step_name = active_program.current_step_name
                     label = "Program step progress" if step_name is None else f"Program step '{step_name.value_str}' progress" 
                     st.progress(active_program.current_step_progress, text=label)
-                    st.write(f"{0.001 * float(active_program.current_step_runtime.value)}s / {0.001 * float(active_program.estimated_step_runtime.value)}s")
+                    st.write(f"{0.001 * to_float(active_program.current_step_runtime.value)}s / {0.001 * to_float(active_program.estimated_step_runtime.value)}s")
                 with st.expander("Program run details", expanded=False):
                     show_variables_table(active_program.variables)
 
@@ -575,7 +582,6 @@ def update_result_set(container, functional_unit: FunctionalUnit):
                 if len(result.variable_set.variables) > 0:
                     st.write("Result data")
                     show_variables_table(result.variable_set.variables)
-
 
 selectedFunctionalUnitKey = "selected_functional_unit"
 lastEventListUpdateKey = "last_event_list_update"

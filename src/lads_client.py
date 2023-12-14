@@ -15,6 +15,7 @@ from typing import Type, NewType, Any, Self, Tuple, Set
 from asyncua import Client, ua, Node
 from asyncua.common.subscription import DataChangeNotif
 from asyncua.common.events import Event
+from asyncua.common.ua_utils import is_subtype, get_node_supertypes
 from enum import IntEnum
 from queue import Queue
 
@@ -90,13 +91,13 @@ class LADSTypes:
         self.ns_LADS = await self.client.get_namespace_index("http://opcfoundation.org/UA/LADS/")
 
         # get well known type nodes
-        self.BaseObjectType = self.client.get_node(ua.ObjectIds.BaseObjectType)
-        self.FiniteStateMachineType = self.client.get_node(ua.ObjectIds.FiniteStateMachineType)
-        self.BaseVariableType = self.client.get_node(ua.ObjectIds.BaseVariableType)
-        self.AnalogItemType = self.client.get_node(ua.ObjectIds.AnalogItemType)
-        self.TwoStateDiscreteType = self.client.get_node(ua.ObjectIds.TwoStateDiscreteType)
-        self.MultiStateDiscreteType = self.client.get_node(ua.ObjectIds.MultiStateDiscreteType)
-        self.EnumerationType = self.client.get_node(ua.ObjectIds.Enumeration)
+        self.BaseObjectType = self.get_node(ua.ObjectIds.BaseObjectType)
+        self.FiniteStateMachineType = self.get_node(ua.ObjectIds.FiniteStateMachineType)
+        self.BaseVariableType = self.get_node(ua.ObjectIds.BaseVariableType)
+        self.AnalogItemType = self.get_node(ua.ObjectIds.AnalogItemType)
+        self.TwoStateDiscreteType = self.get_node(ua.ObjectIds.TwoStateDiscreteType)
+        self.MultiStateDiscreteType = self.get_node(ua.ObjectIds.MultiStateDiscreteType)
+        self.EnumerationType = self.get_node(ua.ObjectIds.Enumeration)
         self.LifetimeVariableType = self.get_di_node(DIObjectIds.LifetimeVariableType)
         self.MachineryItemIdentificationType = self.get_machinery_node(MachineryObjectIds.MachineryItemIdentificationType)
         self.MachineryOperationCounterType = self.get_machinery_node(MachineryObjectIds.MachineryOperationCounterType)
@@ -145,14 +146,20 @@ class LADSTypes:
             _logger.error(f"Unable to load datatype definitions {error}", error)
             await self.client.close_session()
             
+    def get_node(self, id: ua.NodeId | int) -> Node | None:
+        if isinstance(id, ua.NodeId):
+            return self.client.get_node(id)
+        else:
+            return self.client.get_node(ua.NodeId(int(id)))
+
     def get_di_node(self, id: int) -> Node | None:
-        return self.client.get_node(ua.NodeId(id, self.ns_DI))
+        return self.client.get_node(ua.NodeId(int(id), self.ns_DI))
 
     def get_machinery_node(self, id: int) -> Node | None:
-        return self.client.get_node(ua.NodeId(id, self.ns_Machinery))
+        return self.client.get_node(ua.NodeId(int(id), self.ns_Machinery))
 
     def get_lads_node(self, id: int) -> Node | None:
-        return self.client.get_node(ua.NodeId(id, self.ns_LADS))
+        return self.client.get_node(ua.NodeId(int(id), self.ns_LADS))
     
 class Server(LADSTypes):
     def __init__(self, client: Client):
@@ -214,22 +221,14 @@ async def get_parent_nodes(server: Server, node: Node, root_node: Node = None) -
 
 async def browse_types(server: Server, node: Node) -> list[Node]:
     type_node_id =  await node.read_type_definition()
-    type_node = Node(node.session, type_node_id)
+    type_node = server.get_node(type_node_id)
+    return await get_node_supertypes(type_node, includeitself=True)
 
-    root_node = server.BaseObjectType
-    node_class = await node.read_node_class()
-    if node_class == ua.NodeClass.Variable:
-        root_node = server.BaseVariableType
-    else:
-        root_node = server.BaseObjectType
-    if type_node == root_node:
-        return [type_node]    
-    else:
-        return [type_node] + await get_parent_nodes(server, type_node, root_node)
-
-async def is_of_type(server: Server, node: Node, type_node: Node) -> bool:
-    types = await browse_types(server, node)
-    return type_node in types
+async def is_of_type(server: Server, node: Node, super_type_node: Node) -> bool:
+    type_node_id = await node.read_type_definition()
+    type_node = server.client.get_node(type_node_id)
+    result = await is_subtype(type_node, super_type_node.nodeid)
+    return result
 
 unique_name_delimiter = "/"
 
@@ -319,7 +318,8 @@ class LADSNode(Node):
             self.read_display_name(),
             self.read_description()
         )
-        _logger.info(f"Initializing {self.__class__.__name__}({self.display_name})")
+        msg = f"Initializing {self.__class__.__name__}({self.display_name})"
+        _logger.info(msg)
 
     async def finalize_init(self):
         pass
@@ -591,12 +591,10 @@ class Enumeration(SubscribedVariable):
 
     @property
     def value_str(self) -> str:
-        value = int(self.value)
         try:
-            result = self.enum_strings[value]
+            return self.enum_strings[int(self.value)]
         except:
-           result = "unknown"
-        return result
+            return "unknown"
         
 class DiscreteVariable(SubscribedVariable):
 
@@ -986,7 +984,14 @@ class Device(Component):
             variables = variables + self.identification.subscribed_variables
         self.subscription_handler = SubscriptionHandler()
         data_change_handlers = await self.subscription_handler.subscribe_data_change(self.server, variables)
-        events_handler = await self.subscription_handler.subscribe_events(self.server, self)
+        try:
+            events_handler = await self.subscription_handler.subscribe_events(self.server, self)
+        except:
+            try:
+                events_handler = await self.subscription_handler.subscribe_events(self.server, self.server.client.get_server_node())
+            except:
+                _logger.warning("Unable to subscribe to events")
+        
 
     @property
     def location_variables(self) ->list[BaseVariable]:
@@ -1582,11 +1587,14 @@ class CoverFunction(BaseStateMachineFunction):
     def state_machine(self) -> StateMachine:
         return self.cover_state
 
-async def promote_to(cls: Type, node: Node, type_node: Node, server: Server) -> LADSNode:
+async def promote_to(cls: Type, node: Node, super_type_node: Node, server: Server) -> LADSNode:
     if node is None: return None
     node_class = await node.read_node_class()
     if node_class != ua.NodeClass.Method:
-        assert await is_of_type(server, node, type_node), f"node {node.nodeid} is expexted to be of type {type_node.nodeid}"
+        type = await node.read_type_definition()
+        type_node = server.client.get_node(type)
+        result = await is_subtype(type_node, super_type_node.nodeid)
+        assert result, f"node {node.nodeid} is expexted to be of type {type_node.nodeid}"
     node.__class__ = cls
     promoted_node : cls = node
     await promoted_node.init(server)
@@ -1607,12 +1615,10 @@ async def get_lads_multi_state_discrete(parent: LADSNode, name: str) -> MultiSta
 async def get_di_variable(parent: LADSNode, name: str) -> BaseVariable:
     return await BaseVariable.promote(await parent.get_di_child(name), parent.server)
 
-async def get_properties_and_variables(node: LADSNode) -> list[BaseVariable]:
-    
+async def get_properties_and_variables(node: LADSNode) -> list[BaseVariable]:    
     (variables, properties) = await asyncio.gather(node.get_variables(), node.get_properties())
     variables.extend(properties)
-    result: list[BaseVariable] = await asyncio.gather(*(BaseVariable.promote(variable, node.server) for variable in variables))
-    return result
+    return await asyncio.gather(*(BaseVariable.promote(variable, node.server) for variable in variables))
 
 DefaultServerUrl = "opc.tcp://localhost:26543"
 import threading
@@ -1645,7 +1651,7 @@ class Connection:
         running = True
         # run loop
         while running: 
-            self.client = Client(self.url)            
+            self.client = Client(self.url)
             self.server = Server(self.client)
             if (self.user is not None) and (self.password is not None):
                 self.client.set_user(self.user)
