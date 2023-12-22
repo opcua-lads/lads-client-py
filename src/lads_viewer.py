@@ -458,7 +458,7 @@ def show_components(component: Component, expanded_count):
                     try:
                         value = to_float(counter.value, default=0.0)
                         start = to_float(counter.start_value.value, default=0.0)
-                        limit = to_float(counter.limit_value.value, default=0.0)
+                        limit = to_float(counter.limit_value.value, default=100.0)
                         eu = counter.eu
                         warning = False if counter.warning_values is None else any(value < float(warning_value) for warning_value in counter.warning_values.value)
                         color = "red" if warning else "green"
@@ -599,7 +599,8 @@ def main():
     # functional_units = my_server.functional_units
 
     # session state
-    functional_unit_names = list(map(lambda functional_unit: functional_unit.unique_name, functional_units))
+    functional_unit_names = list(map(lambda functional_unit: functional_unit.at_name, functional_units))
+    functional_unit_names.sort()
     if selectedFunctionalUnitKey not in st.session_state:
         st.session_state[selectedFunctionalUnitKey] = functional_unit_names[0]    
     # in anyway create a new last_event_update on rerun
@@ -612,13 +613,13 @@ def main():
     selected_functional_unit = functional_units[0]
     selected_functional_unit_name = st.session_state[selectedFunctionalUnitKey]
     for functional_unit in functional_units:
-        if functional_unit.unique_name == selected_functional_unit_name:
+        if functional_unit.at_name == selected_functional_unit_name:
             selected_functional_unit = functional_unit
 
     # title
     st.subheader("LADS OPC UA Client")
     
-    with st.expander(f"**{selected_functional_unit.unique_name}**", expanded=True):
+    with st.expander(f"**{selected_functional_unit.at_name}**", expanded=True):
         col_cmd, col_state = st.columns([2, 3])
         with col_cmd:
             state_machine = selected_functional_unit.functional_unit_state

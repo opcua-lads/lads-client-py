@@ -137,15 +137,27 @@ class LADSTypes:
         if Connection.data_types is None:
             Connection.data_types = {"Locked": True}
             Connection.data_types = await self.client.load_data_type_definitions(overwrite_existing=False)
+            server_url = self.client.server_url
+            # print(f"Datatypes loaded from server {server_url.scheme}://{server_url.netloc}")
+            # kv = self.KeyValueType("MyProperty", "42.0")
+            # dt = self.client.get_node(kv.data_type)
+            # dt_def = await dt.read_data_type_definition()
+
+    def data_type(self, name: str) -> Type:
         try:
-            data_types = Connection.data_types
-            self.KeyValueType = data_types["KeyValueType"]
-            self.SampleInfoType = data_types["SampleInfoType"]
-            self.NameNodeIdDataType = data_types["NameNodeIdDataType"]
-        except Exception as error:
-            _logger.error(f"Unable to load datatype definitions {error}", error)
-            await self.client.close_session()
-            
+            return Connection.data_types[name]
+        except:
+            _logger.error(f"Unable to load datatype {name}")
+            return None
+
+    @property
+    def KeyValueType(self) -> Type:
+        return self.data_type("KeyValueType")
+
+    @property
+    def SampleInfoType(self) -> Type:
+        return self.data_type("SampleInfoType")
+
     def get_node(self, id: ua.NodeId | int) -> Node | None:
         if isinstance(id, ua.NodeId):
             return self.client.get_node(id)
@@ -1327,10 +1339,11 @@ class FunctionalUnit(LADSNode):
 
         if self.function_set is not None:
             function_variables = self.function_set.all_variables
+            # function_variables = remove_none(function_variables)
             # debug- check for none
             for variable in function_variables:
-                if variable is None:
-                    _logger.error(f"None variable detected in function {self.unique_name}")
+                 if variable is None:
+                     _logger.error(f"None variable detected in function {self.unique_name}")
             child_vars = list(filter(lambda variable: variable.subscription_level > SubscriptionLevel.Never, function_variables))
             variables = variables + child_vars
         if self.program_manager is not None:
@@ -1341,6 +1354,9 @@ class FunctionalUnit(LADSNode):
     def unique_name(self) -> str:
         return f"{self.device.unique_name}{unique_name_delimiter}{self.display_name}"
     
+    @property
+    def at_name(self) -> str:
+        return f"{self.display_name}@{self.device.unique_name}"
     @property
     def current_state(self) -> StateVariable:
         return self.functional_unit_state.current_state
@@ -1487,7 +1503,7 @@ class TimerControlFunction(AnalogControlFunction):
 
     @property
     def variables(self) ->list[BaseVariable]:
-        return super().variables + [self.difference_value]
+        return super().variables + remove_none([self.difference_value])
     
 class DiscreteControlFunction(BaseAnalogDiscreteControlFunction):
     target_value: DiscreteVariable
