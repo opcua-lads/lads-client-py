@@ -25,11 +25,9 @@ For the time being, connections to a LADS OPC UA server a configured via the con
 ## Starting
 The streamlit application is started by envoking streamlit from the command line while providing the path to the streamlit Python apllication as argument:
 ```
-
-
-
+streamlit run src/lads_viewer.py
 ```
-
+This call start the streamlit web-server and opens a web page pointing to the application at http://localhost:8501.
 
 
 
