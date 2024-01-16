@@ -20,6 +20,7 @@ For the time being, connections to a LADS OPC UA server a configured via the con
             "url": "opc.tcp://localhost:4840/LADSServer",
             "enabled": false
         }
+    ]
 }
 ```
 ## Starting
