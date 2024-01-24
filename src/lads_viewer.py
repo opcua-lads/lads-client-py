@@ -200,6 +200,22 @@ def update_functions(function_containers: dict):
                 with pv_col: 
                     st.write(f":blue[**{format_value(controller_parameter.current_value.value)}** {controller_parameter.current_value.eu}]")
         
+def add_chart_items(functions: list[Function], traces: list, arrays: list):
+    for function in functions:
+        analog_item: AnalogItem = None
+        if isinstance(function, AnalogControlFunction):
+            analog_item = function.current_value
+        elif isinstance(function, AnalogScalarSensorFunction):
+            analog_item = function.sensor_value
+        if analog_item is not None:
+            if isinstance(analog_item.value, list):
+                arrays.append((function, analog_item))
+            elif analog_item.history is not None:
+                traces.append((function, analog_item))
+        # recurse sub-functions
+        if function.function_set is not None:
+            add_chart_items(function.function_set.functions, traces=traces, arrays=arrays)
+    
 def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
     with container.container():        
         # collect analog items with history
@@ -207,17 +223,7 @@ def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
         arrays: list[Tuple[Function, AnalogItem]] = []
         idx = 0
 
-        for function in functional_unit.functions:
-            analog_item: AnalogItem = None
-            if isinstance(function, AnalogControlFunction):
-                analog_item = function.current_value
-            elif isinstance(function, AnalogScalarSensorFunction):
-                analog_item = function.sensor_value
-            if analog_item is not None:
-                if isinstance(analog_item.value, list):
-                    arrays.append((function, analog_item))
-                elif analog_item.history is not None:
-                    traces.append((function, analog_item))
+        add_chart_items(functional_unit.functions, traces=traces, arrays=arrays)
 
         if use_plotly:
             # add traces
