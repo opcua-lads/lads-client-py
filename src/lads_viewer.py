@@ -218,7 +218,7 @@ def add_chart_items(functions: list[Function], traces: list, arrays: list):
     
 def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
     with container.container():        
-        # collect analog items with history
+        # collect analog items with history and arrays
         traces: list[Tuple[Function, AnalogItem]] = []
         arrays: list[Tuple[Function, AnalogItem]] = []
         idx = 0
@@ -289,33 +289,40 @@ def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
             i = len(value)
             col_count = int(math.sqrt(3 / 2 * i))
             row_count = int(2 / 3 * col_count)
-            cols: dict = {}
-            cols["Plate"] = list(range(1, row_count + 1))
-            # cols[f"**{function.display_name}**"] = list(range(1, row_count + 1))
-            for col_idx in range(col_count):
-                values = []
-                for row_idx in range(row_count):
-                    values.append(format_number(value[col_idx * row_count + row_idx]))
-                cols[chr(ord("A") + col_idx)] = values
-
-            df = pd.DataFrame(cols)
-            if analog_item.eu_range is not None:
-                eu_range: ua.Range = analog_item.eu_range
-                df.style.background_gradient(
-                    axis=None, 
-                    vmin=eu_range.Low, 
-                    vmax=eu_range.High,
-                    cmap="jet"
-                )
-
+            isPlate = col_count * row_count == i
             with st.expander(f"**{function.display_name}**", expanded=(idx<=2)):
-                #st.write(f"**{function.display_name}**")
-                st.dataframe(
-                    df,
-                    use_container_width=True, 
-                    hide_index=True,
-                )
-                idx += 1
+                if isPlate:
+                    cols: dict = {}
+                    cols["Plate"] = list(range(1, row_count + 1))
+                    # cols[f"**{function.display_name}**"] = list(range(1, row_count + 1))
+                    for col_idx in range(col_count):
+                        values = []
+                        for row_idx in range(row_count):
+                            values.append(format_number(value[col_idx * row_count + row_idx]))
+                        cols[chr(ord("A") + col_idx)] = values
+
+                    df = pd.DataFrame(cols)
+                    if analog_item.eu_range is not None:
+                        eu_range: ua.Range = analog_item.eu_range
+                        df.style.background_gradient(
+                            axis=None, 
+                            vmin=eu_range.Low, 
+                            vmax=eu_range.High,
+                            cmap="jet"
+                        )
+
+                    st.dataframe(
+                        df,
+                        use_container_width=True, 
+                        hide_index=True,
+                    )
+                else:
+                    eu = analog_item.engineering_units
+                    col = eu.DisplayName.Text if eu is not None else "y"
+                    df = pd.DataFrame({col: value})
+                    st.area_chart(df)
+            idx += 1
+
 
 def update_events(container, device: Device):
     events = device.subscription_handler.events

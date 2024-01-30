@@ -290,7 +290,7 @@ class SubscriptionHandler(object):
             variable: Node = self.subscribed_variables[node.nodeid]
             variable.data_change_notification(data)
         except Exception as error:
-            _logger.error(f"datachange_notification error {error}")
+            _logger.error(f"data_change_notification error {error}")
 
     async def event_notification(self, event: Event):
         # obviously there is a bug in the library subscription.py
@@ -504,7 +504,10 @@ class BaseVariable(LADSNode):
     def data_change_notification(self, data: DataChangeNotif):
         self.data_value = data.monitored_item.Value
         if self.history is not None:
-            self.history.loc[pd.to_datetime(self.data_value.SourceTimestamp)] = self.value
+            try:
+                self.history.loc[pd.to_datetime(self.data_value.SourceTimestamp)] = self.value
+            except:
+                pass
             if len(self.history.index) > 600:
                 self.history = self.history.tail(-1)
 
