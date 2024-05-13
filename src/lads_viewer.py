@@ -54,6 +54,15 @@ def format_number(x: float, decis = 1) -> str:
 def function_state_color(function: BaseControlFunction) -> str:
     return state_color(function.current_state)
 
+def variable_status_color(variable: BaseVariable, color_good = 'blue') -> str:
+    status_code = variable.data_value.StatusCode
+    if status_code.is_bad():
+        return 'red'
+    elif status_code.is_uncertain():
+        return 'orange'
+    else:
+        return color_good
+    
 def state_color(current_state: BaseVariable) -> str:
     s = str(current_state.value_str)
     return "green" if "Running" in s else "red" if "Abort" in s else "gray"
@@ -167,7 +176,7 @@ def update_functions(function_containers: dict):
                 if isinstance(function, AnalogControlFunctionWithTotalizer):
                     st.write(":gray[Totalizer]")
             with pv_col: 
-                st.write(f":blue[**{format_value(function.current_value.value)}** {function.current_value.eu}]")
+                st.write(f":{variable_status_color(function.current_value)}[**{format_value(function.current_value.value)}** {function.current_value.eu}]")
                 if isinstance(function, AnalogControlFunctionWithTotalizer):
                     st.write(f":blue[**{format_value(function.totalized_value.value)}** {function.totalized_value.eu}]")
         elif isinstance(function, TwoStateDiscreteControlFunction) or isinstance(function, MultiStateDiscreteControlFunction) :
@@ -175,21 +184,21 @@ def update_functions(function_containers: dict):
             with sp_col:
                 st.write(f":{color}[**{function.target_value.value_str}**]")
             with pv_col: 
-                st.write(f":blue[**{function.current_value.value_str}**]")
+                st.write(f":{variable_status_color(function.current_value)}[**{function.current_value.value_str}**]")
         elif isinstance(function, AnalogScalarSensorFunction):
             if isinstance(function, AnalogScalarSensorFunctionWithCompensation):
                 if function.compensation_value is not None:
                     with sp_col:
                         st.write(f":gray[{format_value(function.compensation_value.value)} {function.compensation_value.eu}]")
             with pv_col: 
-                st.write(f":blue[**{format_value(function.sensor_value.value)}** {function.sensor_value.eu}]")
+                st.write(f":{variable_status_color(function.sensor_value)}[**{format_value(function.sensor_value.value)}** {function.sensor_value.eu}]")
 
         elif isinstance(function, TwoStateDiscreteSensorFunction) or isinstance(function, MultiStateDiscreteSensorFunction):
             with pv_col: 
-                st.write(f":blue[**{function.sensor_value.value_str}**]")
+                st.write(f":{variable_status_color(function.sensor_value)}[**{function.sensor_value.value_str}**]")
         elif isinstance(function, CoverFunction):
             with pv_col: 
-                st.write(f":blue[**{function.current_state.value_str}**]")
+                st.write(f":{variable_status_color(function.current_state)}[**{function.current_state.value_str}**]")
         elif isinstance(function, StartStopControlFunction):
             with pv_col: 
                 st.write(f":{function_state_color(function)}[**{function.current_state.value_str}**]")
@@ -198,7 +207,7 @@ def update_functions(function_containers: dict):
                 with sp_col:
                     st.write(f":{function_state_color(function)}[**{format_value(controller_parameter.target_value.value)}** {controller_parameter.target_value.eu}]")
                 with pv_col: 
-                    st.write(f":blue[**{format_value(controller_parameter.current_value.value)}** {controller_parameter.current_value.eu}]")
+                    st.write(f":{variable_status_color(controller_parameter.current_value)}[**{format_value(controller_parameter.current_value.value)}** {controller_parameter.current_value.eu}]")
         
 def add_chart_items(functions: list[Function], traces: list, arrays: list):
     for function in functions:
@@ -304,13 +313,15 @@ def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
                     df = pd.DataFrame(cols)
                     if analog_item.eu_range is not None:
                         eu_range: ua.Range = analog_item.eu_range
-                        df.style.background_gradient(
-                            axis=None, 
-                            vmin=eu_range.Low, 
-                            vmax=eu_range.High,
-                            cmap="jet"
-                        )
-
+                        try:
+                            df.style.background_gradient(
+                                axis=None, 
+                                vmin=eu_range.Low, 
+                                vmax=eu_range.High,
+                                cmap="jet"
+                            )
+                        except AttributeError:
+                            ' do nothing'
                     st.dataframe(
                         df,
                         use_container_width=True, 
@@ -322,7 +333,6 @@ def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
                     df = pd.DataFrame({col: value})
                     st.area_chart(df)
             idx += 1
-
 
 def update_events(container, device: Device):
     events = device.subscription_handler.events

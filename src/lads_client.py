@@ -1359,7 +1359,15 @@ class FunctionalUnit(LADSNode):
     
     @property
     def at_name(self) -> str:
-        return f"{self.display_name}@{self.device.unique_name}"
+        device = self.device
+        device_name = device.display_name
+        server_name = device.server.name
+        if len(device.functional_units) > 1:
+            return f"{device_name}{unique_name_delimiter}{self.display_name}@{server_name}"
+        else:
+            return f"{device_name}@{server_name}"
+
+
     @property
     def current_state(self) -> StateVariable:
         return self.functional_unit_state.current_state
