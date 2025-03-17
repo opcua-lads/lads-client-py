@@ -1729,6 +1729,7 @@ class TwoStateDiscreteSensorFunction(BaseSensorFunction):
         await super().init(server)        
         self.sensor_value = await get_lads_two_state_discrete(self, "SensorValue")
 
+# MARK: MultiStateDiscreteSensorFunction
 class MultiStateDiscreteSensorFunction(BaseSensorFunction):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1738,6 +1739,7 @@ class MultiStateDiscreteSensorFunction(BaseSensorFunction):
         await super().init(server)        
         self.sensor_value = await get_lads_multi_state_discrete(self, "SensorValue")
 
+# MARK: BaseAnalogDiscreteControlFunction
 class BaseAnalogDiscreteControlFunction(BaseControlFunction):
     def __str__(self):
         return f"{super().__str__()}\n  {self.current_value}\n  {self.target_value}"
@@ -1746,6 +1748,7 @@ class BaseAnalogDiscreteControlFunction(BaseControlFunction):
     def variables(self) ->list[BaseVariable]:
         return super().variables + remove_none([self.current_value, self.target_value])
     
+# MARK: AnalogControlFunction
 class AnalogControlFunction(BaseAnalogDiscreteControlFunction):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1756,6 +1759,7 @@ class AnalogControlFunction(BaseAnalogDiscreteControlFunction):
         self.current_value = await get_lads_analog_item(self, "CurrentValue")
         self.target_value = await get_lads_analog_item(self, "TargetValue")
 
+# MARK: AnalogControlFunctionWithTotalizer
 class AnalogControlFunctionWithTotalizer(AnalogControlFunction):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1772,6 +1776,7 @@ class AnalogControlFunctionWithTotalizer(AnalogControlFunction):
     def variables(self) ->list[BaseVariable]:
         return super().variables + [self.totalized_value]
 
+# MARK: TimerControlFunction
 class TimerControlFunction(AnalogControlFunction):
     def __str__(self):
         return f"{super().__str__()}\n  {self.difference_value}"
@@ -1788,10 +1793,12 @@ class TimerControlFunction(AnalogControlFunction):
     def variables(self) ->list[BaseVariable]:
         return super().variables + remove_none([self.difference_value])
     
+# MARK: DiscreteControlFunction
 class DiscreteControlFunction(BaseAnalogDiscreteControlFunction):
     target_value: DiscreteVariable
     current_value: DiscreteVariable
 
+# MARK: TwoStateDiscreteControlFunction
 class TwoStateDiscreteControlFunction(DiscreteControlFunction):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1802,6 +1809,7 @@ class TwoStateDiscreteControlFunction(DiscreteControlFunction):
         self.current_value = await get_lads_two_state_discrete(self, "CurrentValue")
         self.target_value = await get_lads_two_state_discrete(self, "TargetValue")
 
+# MARK: MultiStateDiscreteControlFunction
 class MultiStateDiscreteControlFunction(DiscreteControlFunction):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1812,6 +1820,7 @@ class MultiStateDiscreteControlFunction(DiscreteControlFunction):
         self.current_value = await get_lads_multi_state_discrete(self, "CurrentValue")
         self.target_value = await get_lads_multi_state_discrete(self, "TargetValue")
 
+# MARK: MulitModeControlFunction
 class ControllerParameter(LADSNode):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1871,6 +1880,7 @@ class MulitModeControlFunction(BaseControlFunction):
             variables.append(controller_parameter.current_value)
         return super().variables + variables
     
+# MARK: CoverFunction
 class CoverFunction(BaseStateMachineFunction):
     cover_state: StateMachine = None
 
@@ -1886,8 +1896,7 @@ class CoverFunction(BaseStateMachineFunction):
     def state_machine(self) -> StateMachine:
         return self.cover_state
 
-#MARK: ASYNC FUNCTIONS
-
+#MARK: Promotion of generic OPC UA nodes to specfic LADS objects
 async def promote_to(cls: Type, node: Node, super_type_node: Node, server: Server) -> LADSNode:
     if node is None: return None
     node_class = await node.read_node_class()

@@ -41,14 +41,16 @@ fs = fu[k].function_set
 ```
 <br>
 
-The list of Sensor Functions present inside the Function Set can be retrieved as 
+The list of Functions present inside the Function Set can be retrieved as 
 
 ```python
 funcs = fs.functions
 ```
+Please be aware, that LADS specifies numerous function types, representing e.g. sensors, controllers, timers, lids/doors and so on. For further information refer to the [specification](https://reference.opcfoundation.org/LADS/v100/docs/) and the [workshop example](https://github.com/opcua-lads/workshop).
 <br>
 
-The Sensor Value of a Sensor Function 'j' can be accessed as 
+Variables, methods and objects of a function can be easily accessed as properties, e.g.
+the Sensor Value of a Sensor Function 'j' can be accessed as 
 
 ```python
 value = funcs[j].sensor_value.value
