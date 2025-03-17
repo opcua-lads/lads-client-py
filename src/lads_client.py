@@ -1258,7 +1258,8 @@ class ActiveProgram(LADSNode):
     @property
     def current_progress(self) -> float:
         try:
-            return self.current_runtime.value / self.estimated_runtime.value
+            progress = max(min(self.current_runtime.value / self.estimated_runtime.value, 1), 0)
+            return progress
         except:
             return 0.0
 
@@ -1269,7 +1270,8 @@ class ActiveProgram(LADSNode):
     @property
     def current_step_progress(self) -> float:
         try:
-            return self.current_step_runtime.value / self.estimated_step_runtime.value
+            progress = max(min(self.current_step_runtime.value / self.estimated_step_runtime.value, 1), 0)
+            return progress
         except:
             return 0.0
 
@@ -1623,7 +1625,8 @@ async def promote_to(cls: Type, node: Node, super_type_node: Node, server: Serve
         result = await is_subtype(type_node, super_type_node.nodeid)
         assert result, f"node {node.nodeid} is expexted to be of type {type_node.nodeid}"
     node.__class__ = cls
-    promoted_node : cls = node
+    # promoted_node : cls = node
+    promoted_node = node
     await promoted_node.init(server)
     return promoted_node
 
