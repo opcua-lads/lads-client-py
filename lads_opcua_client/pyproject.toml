@@ -12,7 +12,9 @@ dependencies = [
 ]
 requires-python = ">=3.6"
 authors = [
-  { name = "Dr. Mathias Arnold", email = "m.arnold@aixengineers.de" }
+  { name = "Dr. Mathias Arnold", email = "m.arnold@aixengineers.de" },
+  { name = "Dr. Ricardo Cunha", email = "cunha@iuta.de" },
+  { name = "Muhammad Hamad-Ul-Hassan", email = "hamadibrahimkhel@gmail.com" }
 ]
 maintainers = [
   { name = "Dr. Mathias Arnold", email = "m.arnold@aixengineers.de" }

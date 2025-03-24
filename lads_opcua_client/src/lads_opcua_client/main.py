@@ -25,7 +25,7 @@
 import asyncio
 import logging
 import threading
-#import time remove???
+import time
 import json
 import pandas as pd
 import datetime as dt
@@ -220,11 +220,12 @@ class Server(LADSTypes):
         self.running = True
         self.call_async_queue = Queue()
 
-    # To cleanly disconnect from the server also
     async def _disconnect(self):
-        self.running = False
-        await self.client.disconnect()
         print(f"Disconnecting from {self.name}")
+        await self.client.disconnect()
+        self.running = False
+        self.initialized = False
+        print("Disconnected successfully.")
 
     async def init(self) -> dict:
         data_types = await super().init()
@@ -1949,9 +1950,9 @@ class Connection:
         initialized:
             Checks if the server is initialized.
         connect():
-            Starts the connection thread and waits until the server is initialized.
+            Starts the connection thread (non-asynchronous) and waits until the server is initialized.
         disconnect():
-            Disconnects the server.
+            Disconnects the server (non-asynchronous).
     """
 
     data_types: dict = None
@@ -1971,6 +1972,7 @@ class Connection:
         self.url = url
         self.user = user
         self.password = password
+        self.running = False
         self.thread = threading.Thread(target=self._run_connection, daemon=True, name=f"LADS OPC UA Connection {url}")
         #self.thread.start()
 
@@ -1983,21 +1985,33 @@ class Connection:
             return self.server.initialized
     
     def _run_connection(self):
-        asyncio.run(self._run_connection_async())
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(self._run_connection_async())
+        finally:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
+        #asyncio.run(self._run_connection_async())
 
     def connect(self):
-        """Starts the connection thread."""
+        """Starts the connection thread (non-asynchronous)."""
+        self.running = True
         self.thread.start()
     
     def disconnect(self):
-        """Disconnects the server."""
+        """Disconnects the server and stops the thread (non-asynchronous)."""
         if self.server is not None:
-            self.server._disconnect()
+            if self.server.running:
+                print(f"Disconnecting from {self.server.name}...", end="")
+                self.running = False
+                self.thread.join()
+                while self.server.initialized:
+                    time.sleep(0.1)
+                print(f"Done!")
     
     async def _run_connection_async(self):
-        running = True
-        # run loop
-        while running:
+        while self.running:
             self.client = Client(self.url)
             self.server = Server(self.client)
             if (self.user is not None) and (self.password is not None):
@@ -2006,21 +2020,17 @@ class Connection:
             try:
                 async with self.client:
                     await self.server.init()
-                    # evaluation loop
-                    while self.server.running:
+                    while self.server.running and self.running:
                         await self.server.evaluate()
                         await self.client.check_connection()
+                    if self.server.running:
+                        self.server.running = False
+                        self.server.initialized = False
             except (TimeoutError, ConnectionError, ua.UaError) as error:
                 _logger.warning(f"Reconnecting in 2 seconds: {error}")
                 await asyncio.sleep(2)
             except Exception as error:
                 _logger.error(error)
-            finally:
-                running = self.server.running
-            if not running:
-                await self.client.disconnect()
-                await self.server._disconnect()  # the server shall also be disconnected
-                _logger.warning("disconnected")
 
 def get_value(data: dict, key: str) -> any:
     if key in data:
@@ -2043,9 +2053,9 @@ class Connections:
         add(url, user, password):
             Adds a new connection with the given parameters.
         connect():
-            Starts all connection threads.
+            Starts all connection threads (non-asynchronous).
         disconnect():
-            Disconnects from all server connections.
+            Disconnects from all server connections (non-asynchronous).
     """
 
     connections: list[Connection] = []
@@ -2088,15 +2098,15 @@ class Connections:
         return connection
     
     def connect(self):
-        """Starts the connection threads."""
+        """Starts the connection threads (non-asynchronous)."""
         for connection in self.connections:
             connection.connect()
     
     def disconnect(self):
-        """Disconnects the server."""
+        """Disconnects the server/s (non-asynchronous)."""
         for connection in self.connections:
             if connection.server is not None:
-                connection.server._disconnect()
+                connection.disconnect()
 
     @property
     def urls(self) -> list[str]:
