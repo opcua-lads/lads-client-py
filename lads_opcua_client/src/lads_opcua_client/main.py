@@ -1290,7 +1290,10 @@ class Function(LADSNode):
     
     @property
     def variables(self) ->list[BaseVariable]:
-        return [self.is_enabled]
+        if (self.is_enabled is None):
+            return []
+        else:
+            return [self.is_enabled]
     
     @property
     def all_variables(self) -> list[BaseVariable]:
