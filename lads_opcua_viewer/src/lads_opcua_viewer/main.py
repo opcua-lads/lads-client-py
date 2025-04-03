@@ -616,12 +616,12 @@ def update_active_program(progress_container, functional_unit: lads.FunctionalUn
                 active_program = program_manager.active_program
                 if active_program.has_progress:
                     st.progress(active_program.current_progress, "Program run progress")
-                    st.write(f"{0.001 * to_float(active_program.current_runtime.value)}s / {0.001 * to_float(active_program.estimated_runtime.value)}s")
+                    st.write(f"{format_number(0.001 * to_float(active_program.current_runtime.value))}s / {format_number(0.001 * to_float(active_program.estimated_runtime.value))}s")
                 if active_program.has_step_progress:
                     step_name = active_program.current_step_name
                     label = "Program step progress" if step_name is None else f"Program step '{step_name.value_str}' progress" 
                     st.progress(active_program.current_step_progress, text=label)
-                    st.write(f"{0.001 * to_float(active_program.current_step_runtime.value)}s / {0.001 * to_float(active_program.estimated_step_runtime.value)}s")
+                    st.write(f"{format_number(0.001 * to_float(active_program.current_step_runtime.value))}s / {format_number(0.001 * to_float(active_program.estimated_step_runtime.value))}s")
                 with st.expander("Program run details", expanded=False):
                     show_variables_table(active_program.variables)
 
