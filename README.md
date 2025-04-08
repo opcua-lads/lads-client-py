@@ -33,4 +33,4 @@ pip install dist/lads_opcua_viewer-0.0.1.tar.gz
 The *[lads_opcua_client](https://github.com/opcua-lads/lads-client-py/tree/main/lads_opcua_client)* library provides a Pythonic interface to the LADS OPC UA server. Consult the client [README](https://github.com/opcua-lads/lads-client-py/blob/main/lads_opcua_client/README.md) file
 in the package directory for further information. The *[lads_opcua_viewer](https://github.com/opcua-lads/lads-client-py/tree/main/lads_opcua_viewer)* library provides a Streamlit
 based viewer for the LADS OPC UA server. Consult the viewer [README](https://github.com/opcua-lads/lads-client-py/blob/main/lads_opcua_viewer/README.md) file in the package directory for further
-information.
+information. Note that the viewer depends on the client library and requires it to be installed in the same environment.
