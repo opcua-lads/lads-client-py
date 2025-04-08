@@ -1912,7 +1912,8 @@ async def promote_to(cls: Type, node: Node, super_type_node: Node, server: Serve
         result = await is_subtype(type_node, super_type_node.nodeid)
         assert result, f"node {node.nodeid} is expexted to be of type {type_node.nodeid}"
     node.__class__ = cls
-    promoted_node : cls = node
+    # promoted_node : cls = node
+    promoted_node = node
     await promoted_node.init(server)
     return promoted_node
 
