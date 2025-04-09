@@ -1,39 +1,51 @@
-"""
- *
- * Copyright (c) 2023 Dr. Matthias Arnold, AixEngineers, Aachen, Germany.
- *
- * This source code is licensed under the MIT license found in the
- * LICENSE file in the root directory of this source tree.
- *
+"""Python Streamlit app to visualize LADS OPC UA servers.
+
+This library provides a Streamlit app to visualize the data of LADS OPC UA servers. It uses the LADS OPC UA client to connect to the servers and to read and write data. The app displays the functional units, the functions, the variables, the events, the programs, and the asset management of the servers. The app updates the data in real-time.
+
+Copyright (c) 2023 Dr. Matthias Arnold, AixEngineers, Aachen, Germany.
+
+This source code is licensed under the MIT license found in the
+LICENSE file in the root directory of this source tree.
 """
 
 import streamlit as st
 import datetime as dt
 import pandas as pd
 import time, math
+import sys
 import matplotlib as plt
 import plotly.graph_objects as go
 from typing import Tuple
-from lads_client import AnalogScalarSensorFunctionWithCompensation, BaseStateMachineFunction, Connections, DiscreteControlFunction, DiscreteVariable, LADSNode, MultiStateDiscreteControlFunction, MultiStateDiscreteSensorFunction, TimerControlFunction
-from lads_client import TwoStateDiscreteControlFunction, TwoStateDiscreteSensorFunction, BaseVariable, AnalogItem, BaseControlFunction, Component, CoverFunction, Device, FunctionalUnit
-from lads_client import FunctionSet, Function, AnalogControlFunction, AnalogScalarSensorFunction, StartStopControlFunction, MulitModeControlFunction, StateMachine, AnalogControlFunctionWithTotalizer
+import lads_opcua_client as lads
 from asyncua import ua
+import atexit
+
+# For disabling the exit of the threadpool executor
+# This is necessary to avoid an error message when the app is closed
+# Threads are manually stopped by the atexit in the Connection class
+def disable_exit_for_threadpool_executor():
+    import concurrent.futures
+    atexit.unregister(concurrent.futures.thread._python_exit)
+disable_exit_for_threadpool_executor()
 
 st.set_page_config(page_title="LADS OPC UA Client", layout="wide")
 
 @st.cache_resource(show_spinner="Connecting to OPC servers")
-def get_server_connections(config_file: str = "src/config.json") -> Connections:
-    connections = Connections(config_file)
+def get_server_connections(config_file: str = "config.json") -> lads.Connections:
+    connections = lads.Connections(config_file)
     return connections
 
-def get_initialized_connections() -> Connections:
+# MARK: get_initialized_connections
+def get_initialized_connections() -> lads.Connections:
     connections = get_server_connections()
+    connections.connect()
     urls = ", ".join(connections.urls)
     with st.spinner(f"Initializing OPC connections '{urls}' ..."):
         while not connections.initialized:
             time.sleep(0.1)
         return connections
 
+# MARK: format_value
 def format_value(x: float | list[float], decis = 1) -> str:
     result = "NaN"
     try:
@@ -44,6 +56,7 @@ def format_value(x: float | list[float], decis = 1) -> str:
     finally:
         return result
 
+# MARK: format_number
 def format_number(x: float, decis = 1) -> str:
     result = "NaN"
     try:
@@ -51,10 +64,12 @@ def format_number(x: float, decis = 1) -> str:
     finally:
         return result
 
-def function_state_color(function: BaseControlFunction) -> str:
+# MARK: function_state_color
+def function_state_color(function: lads.BaseControlFunction) -> str:
     return state_color(function.current_state)
 
-def variable_status_color(variable: BaseVariable, color_good = 'blue') -> str:
+# MARK: variable_status_color
+def variable_status_color(variable: lads.BaseVariable, color_good = 'blue') -> str:
     status_code = variable.data_value.StatusCode
     if status_code.is_bad():
         return 'red'
@@ -62,12 +77,14 @@ def variable_status_color(variable: BaseVariable, color_good = 'blue') -> str:
         return 'orange'
     else:
         return color_good
-    
-def state_color(current_state: BaseVariable) -> str:
+
+# MARK: state_color
+def state_color(current_state: lads.BaseVariable) -> str:
     s = str(current_state.value_str)
     return "green" if "Running" in s else "red" if "Abort" in s else "gray"
 
-def call_function_state_machine_method(function: BaseStateMachineFunction):
+# MARK: call_function_state_machine_method
+def call_function_state_machine_method(function: lads.BaseStateMachineFunction):
     if function is None: return
     key = function.unique_name
     if not key in st.session_state:
@@ -76,7 +93,8 @@ def call_function_state_machine_method(function: BaseStateMachineFunction):
     function.state_machine.call_method_by_name(method_name)
     st.session_state[key] = None
 
-def call_state_machine_method(state_machine: StateMachine):
+# MARK: call_state_machine_method
+def call_state_machine_method(state_machine: lads.StateMachine):
     key = state_machine.nodeid
     if not key in st.session_state:
         st.session_state[key] = None
@@ -84,7 +102,8 @@ def call_state_machine_method(state_machine: StateMachine):
     state_machine.call_method_by_name(method_name)
     st.session_state[key] = None
 
-def write_variable_value(variable: BaseVariable):
+# MARK: write_variable_value
+def write_variable_value(variable: lads.BaseVariable):
     if variable is None: 
         return
     key = variable.nodeid
@@ -93,7 +112,8 @@ def write_variable_value(variable: BaseVariable):
     variable.set_value(st.session_state[key])
     st.session_state[key] = None
 
-def write_discrete_variable_value(variable: DiscreteVariable):
+# MARK: write_discrete_variable_value
+def write_discrete_variable_value(variable: lads.DiscreteVariable):
     if variable is None: 
         return
     key = variable.nodeid
@@ -102,7 +122,8 @@ def write_discrete_variable_value(variable: DiscreteVariable):
     variable.set_value_from_str(st.session_state[key])
     st.session_state[key] = None
 
-def add_variable_value_input(variable: BaseVariable, parent: LADSNode = None):
+# MARK: add_variable_value_input
+def add_variable_value_input(variable: lads.BaseVariable, parent: lads.LADSNode = None):
     if variable is None:
         return
     if variable.has_write_access:
@@ -111,14 +132,16 @@ def add_variable_value_input(variable: BaseVariable, parent: LADSNode = None):
             help = f"{parent.display_name}.{help}"
         st.number_input(variable.display_name, on_change = write_variable_value(variable), value=None, placeholder=str(variable.value), key=variable.nodeid, label_visibility="collapsed", help = help)
 
-def show_functions(container, functional_unit: FunctionalUnit) -> dict:
+# MARK: show_functions
+def show_functions(container, functional_unit: lads.FunctionalUnit) -> dict:
     functions_container = container.container()
     function_containers = {}
     show_function_set(functions_container, path="", function_set=functional_unit.function_set, container_dict=function_containers)
     update_functions(function_containers)
     return function_containers
 
-def show_function_set(container, path: str, function_set: FunctionSet, container_dict: dict):
+# MARK: show_function_set
+def show_function_set(container, path: str, function_set: lads.FunctionSet, container_dict: dict):
      with container:
         index = 0
         for function in function_set.functions:
@@ -129,15 +152,15 @@ def show_function_set(container, path: str, function_set: FunctionSet, container
                 with st.expander(label=label, expanded=(path == "") and (index < 10)):
                     col_static, col_sp, col_pv = st.columns([4, 4, 5])
                     with col_static:
-                        if isinstance(function, BaseStateMachineFunction):
-                            if isinstance(function, AnalogControlFunction):
+                        if isinstance(function, lads.BaseStateMachineFunction):
+                            if isinstance(function, lads.AnalogControlFunction):
                                 add_variable_value_input(function.target_value, function)
-                            elif isinstance(function, MulitModeControlFunction):
+                            elif isinstance(function, lads.MulitModeControlFunction):
                                 for controller_parameter in function.controller_parameters:
                                     add_variable_value_input(controller_parameter.target_value, controller_parameter)
                                 current_mode = function.current_mode
                                 mode = st.selectbox(label=current_mode.display_name, on_change=write_variable_value(current_mode), options=function.modes, label_visibility="collapsed", key=current_mode.nodeid, placeholder="Choose a mode")
-                            elif isinstance(function, DiscreteControlFunction):
+                            elif isinstance(function, lads.DiscreteControlFunction):
                                 target_value = function.target_value
                                 cmd = st.selectbox(label="Command", options=target_value.values_as_str, index=None, label_visibility="collapsed", key=target_value.nodeid, on_change=write_discrete_variable_value(target_value), placeholder="Choose a value")
                             method_names = function.state_machine.method_names
@@ -152,14 +175,14 @@ def show_function_set(container, path: str, function_set: FunctionSet, container
 
             if function.function_set is not None:
                 show_function_set(container, s, function_set=function.function_set, container_dict=container_dict)
-    
-def update_functions(function_containers: dict):
 
+# MARK: update_functions
+def update_functions(function_containers: dict):
     for function, containers in function_containers.items():
         container_sp, container_pv = containers
         sp_col = container_sp.container()
         pv_col = container_pv.container()
-        if isinstance(function, TimerControlFunction):
+        if isinstance(function, lads.TimerControlFunction):
             color = function_state_color(function)
             with sp_col:
                 if function.target_value is not None:
@@ -169,52 +192,53 @@ def update_functions(function_containers: dict):
                     st.write(f":blue[**{format_value(0.001 * function.current_value.value)}** s]")
                 if function.difference_value is not None:
                     st.write(f":blue[**{format_value(0.001 * function.difference_value.value)}** s]")
-        elif isinstance(function, AnalogControlFunction):
+        elif isinstance(function, lads.AnalogControlFunction):
             color = function_state_color(function)
             with sp_col:
                 st.write(f":{color}[**{format_value(function.target_value.value)}** {function.target_value.eu}]")
-                if isinstance(function, AnalogControlFunctionWithTotalizer):
+                if isinstance(function, lads.AnalogControlFunctionWithTotalizer):
                     st.write(":gray[Totalizer]")
             with pv_col: 
                 st.write(f":{variable_status_color(function.current_value)}[**{format_value(function.current_value.value)}** {function.current_value.eu}]")
-                if isinstance(function, AnalogControlFunctionWithTotalizer):
+                if isinstance(function, lads.AnalogControlFunctionWithTotalizer):
                     st.write(f":blue[**{format_value(function.totalized_value.value)}** {function.totalized_value.eu}]")
-        elif isinstance(function, TwoStateDiscreteControlFunction) or isinstance(function, MultiStateDiscreteControlFunction) :
+        elif isinstance(function, lads.TwoStateDiscreteControlFunction) or isinstance(function, lads.MultiStateDiscreteControlFunction) :
             color = function_state_color(function)
             with sp_col:
                 st.write(f":{color}[**{function.target_value.value_str}**]")
             with pv_col: 
                 st.write(f":{variable_status_color(function.current_value)}[**{function.current_value.value_str}**]")
-        elif isinstance(function, AnalogScalarSensorFunction):
-            if isinstance(function, AnalogScalarSensorFunctionWithCompensation):
+        elif isinstance(function, lads.AnalogScalarSensorFunction):
+            if isinstance(function, lads.AnalogScalarSensorFunctionWithCompensation):
                 if function.compensation_value is not None:
                     with sp_col:
                         st.write(f":gray[{format_value(function.compensation_value.value)} {function.compensation_value.eu}]")
             with pv_col: 
                 st.write(f":{variable_status_color(function.sensor_value)}[**{format_value(function.sensor_value.value)}** {function.sensor_value.eu}]")
 
-        elif isinstance(function, TwoStateDiscreteSensorFunction) or isinstance(function, MultiStateDiscreteSensorFunction):
+        elif isinstance(function, lads.TwoStateDiscreteSensorFunction) or isinstance(function, lads.MultiStateDiscreteSensorFunction):
             with pv_col: 
                 st.write(f":{variable_status_color(function.sensor_value)}[**{function.sensor_value.value_str}**]")
-        elif isinstance(function, CoverFunction):
+        elif isinstance(function, lads.CoverFunction):
             with pv_col: 
                 st.write(f":{variable_status_color(function.current_state)}[**{function.current_state.value_str}**]")
-        elif isinstance(function, StartStopControlFunction):
+        elif isinstance(function, lads.StartStopControlFunction):
             with pv_col: 
                 st.write(f":{function_state_color(function)}[**{function.current_state.value_str}**]")
-        elif isinstance(function, MulitModeControlFunction):
+        elif isinstance(function, lads.MulitModeControlFunction):
             for controller_parameter in function.controller_parameters:
                 with sp_col:
                     st.write(f":{function_state_color(function)}[**{format_value(controller_parameter.target_value.value)}** {controller_parameter.target_value.eu}]")
                 with pv_col: 
                     st.write(f":{variable_status_color(controller_parameter.current_value)}[**{format_value(controller_parameter.current_value.value)}** {controller_parameter.current_value.eu}]")
-        
-def add_chart_items(functions: list[Function], traces: list, arrays: list):
+
+# MARK: add_chart_items
+def add_chart_items(functions: list[lads.Function], traces: list, arrays: list):
     for function in functions:
-        analog_item: AnalogItem = None
-        if isinstance(function, AnalogControlFunction):
+        analog_item: lads.AnalogItem = None
+        if isinstance(function, lads.AnalogControlFunction):
             analog_item = function.current_value
-        elif isinstance(function, AnalogScalarSensorFunction):
+        elif isinstance(function, lads.AnalogScalarSensorFunction):
             analog_item = function.sensor_value
         if analog_item is not None:
             if isinstance(analog_item.value, list):
@@ -224,12 +248,13 @@ def add_chart_items(functions: list[Function], traces: list, arrays: list):
         # recurse sub-functions
         if function.function_set is not None:
             add_chart_items(function.function_set.functions, traces=traces, arrays=arrays)
-    
-def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
+
+# MARK: update_charts
+def update_charts(container, functional_unit: lads.FunctionalUnit, use_plotly=True):
     with container.container():        
         # collect analog items with history and arrays
-        traces: list[Tuple[Function, AnalogItem]] = []
-        arrays: list[Tuple[Function, AnalogItem]] = []
+        traces: list[Tuple[lads.Function, lads.AnalogItem]] = []
+        arrays: list[Tuple[lads.Function, lads.AnalogItem]] = []
         idx = 0
 
         add_chart_items(functional_unit.functions, traces=traces, arrays=arrays)
@@ -282,13 +307,15 @@ def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
                 legend = dict(yanchor = "top", xanchor = "left", x = 0.7, y = 1.35),
             )
             with st.expander("**Chart**", expanded=(idx==0)):
-                st.plotly_chart(fig, use_container_width=True)
+                unique_key = f"plotly_chart_{time.time_ns()}"
+                st.plotly_chart(fig, use_container_width=True, key=unique_key)
                 idx += 1
         else:
             for trace in traces:
                 function, analog_item = trace
                 with st.expander(f"**Chart {function.display_name}**", expanded=(idx==0)):
-                    st.line_chart(data = analog_item.history, height = 100)
+                    unique_key = f"line_chart_{time.time_ns()}"
+                    st.line_chart(data = analog_item.history, height = 100, key=unique_key)
                     idx += 1
 
         # tables
@@ -331,10 +358,12 @@ def update_charts(container, functional_unit: FunctionalUnit, use_plotly=True):
                     eu = analog_item.engineering_units
                     col = eu.DisplayName.Text if eu is not None else "y"
                     df = pd.DataFrame({col: value})
-                    st.area_chart(df)
+                    unique_key = f"area_chart_{time.time_ns()}"
+                    st.area_chart(df, key=unique_key)
             idx += 1
 
-def update_events(container, device: Device):
+# MARK: update_events
+def update_events(container, device: lads.Device):
     events = device.subscription_handler.events
     if events is None:
         return
@@ -381,7 +410,8 @@ def update_events(container, device: Device):
                 }
             )
 
-def show_variables_table(variables: list[BaseVariable], has_description: bool = False):
+# MARK: show_variables_table
+def show_variables_table(variables: list[lads.BaseVariable], has_description: bool = False):
     names = []
     values = [] 
     descriptions = []
@@ -413,7 +443,8 @@ def show_variables_table(variables: list[BaseVariable], has_description: bool = 
     }
     st.dataframe(data, use_container_width=True, hide_index=True, column_config=column_config)
 
-def show_asset_management(container, device: Device):
+# MARK: show_asset_management
+def show_asset_management(container, device: lads.Device):
     device_state_machine = device.device_state
     device_state_methods = device_state_machine.method_names
     operation_mode_state_machine = device.machinery_operation_mode
@@ -435,7 +466,8 @@ def show_asset_management(container, device: Device):
     update_asset_management(container_device, container_map, container_components, device)
     return container_device, container_map, container_components
 
-def update_asset_management(container_device, container_map, container_components, device: Device):
+# MARK: update_asset_management
+def update_asset_management(container_device, container_map, container_components, device: lads.Device):
     with container_device:
         state_vars = device.state_machine_variables + device.location_variables
         with st.expander(f"**Status {device.display_name}**", expanded=True):  
@@ -463,7 +495,8 @@ def update_asset_management(container_device, container_map, container_component
     with container_components.container():
         show_components(device, expanded_count=1)
 
-def show_components(component: Component, expanded_count):
+# MARK: show_components
+def show_components(component: lads.Component, expanded_count):
     with st.expander(f"**{component.__class__.__name__} {component.display_name}**", expanded=expanded_count > 0):
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -498,7 +531,8 @@ def show_components(component: Component, expanded_count):
             count = count - 1 
             show_components(sub_component, count)
 
-def show_program_template_set(container, functional_unit: FunctionalUnit):
+# MARK: show_program_template_set
+def show_program_template_set(container, functional_unit: lads.FunctionalUnit):
     with container.container():
         st.write("**Templates**")
         program_manager = functional_unit.program_manager
@@ -508,18 +542,21 @@ def show_program_template_set(container, functional_unit: FunctionalUnit):
             with st.expander(program_template.display_name, expanded=False):
                 show_variables_table(program_template.variables)
 
-def show_state(container, functional_unit: FunctionalUnit) -> any:
+# MARK: show_state
+def show_state(container, functional_unit: lads.FunctionalUnit) -> any:
     container_state = container.empty()
     update_state(container_state, functional_unit)
     return container_state
 
-def update_state(container, functional_unit: FunctionalUnit) -> bool:
+# MARK: update_state
+def update_state(container, functional_unit: lads.FunctionalUnit) -> bool:
     current_state_var = functional_unit.current_state
     with container:
         st.write(f":{state_color(current_state_var)}[**{current_state_var.value_str}**]")
     return False
 
-def show_active_program(container, functional_unit: FunctionalUnit) -> any:
+# MARK: show_active_program
+def show_active_program(container, functional_unit: lads.FunctionalUnit) -> any:
     current_state_var = functional_unit.current_state
     st.session_state[current_state_var.nodeid] = "Init"
 
@@ -554,6 +591,7 @@ def show_active_program(container, functional_unit: FunctionalUnit) -> any:
     update_active_program(progress_container, functional_unit)
     return progress_container
 
+# MARK: to_float
 def to_float(value, default: float = float("nan")) -> float:
     try:
         result = float(value)
@@ -561,7 +599,8 @@ def to_float(value, default: float = float("nan")) -> float:
         result = default
     return result
 
-def update_active_program(progress_container, functional_unit: FunctionalUnit) -> bool:
+# MARK: update_active_program
+def update_active_program(progress_container, functional_unit: lads.FunctionalUnit) -> bool:
     current_state_var = functional_unit.current_state
     current_state = current_state_var.value_str
     previous_state = st.session_state[current_state_var.nodeid]
@@ -593,7 +632,8 @@ def update_active_program(progress_container, functional_unit: FunctionalUnit) -
         except:
             pass
 
-def update_result_set(container, functional_unit: FunctionalUnit):
+# MARK: update_result_set
+def update_result_set(container, functional_unit: lads.FunctionalUnit):
     with container.container():
         st.write("**Results**")
         program_manager = functional_unit.program_manager
@@ -609,17 +649,40 @@ def update_result_set(container, functional_unit: FunctionalUnit):
 selectedFunctionalUnitKey = "selected_functional_unit"
 lastEventListUpdateKey = "last_event_list_update"
 
+# MARK: empty
 def empty(container):
     container.empty()
     time.sleep(0.02)
     return container
 
-def main():
-    connections = get_initialized_connections()
-    functional_units = connections.functional_units
+# MARK: ConnectionsManager
+class ConnectionsManager:
+    def __init__(self):
+        self.connections = None
 
-    #my_server = my_connection.server
-    # functional_units = my_server.functional_units
+    def set_connections(self, connections):
+        self.connections = connections
+
+    def disconnect_all(self):
+        self.connections.disconnect()
+
+# MARK: Global ConnectionsManager
+connections_manager = ConnectionsManager()
+
+# MARK: main
+def main():
+    # @DrMatthiasArnold at atexit there is an attempt to disconnect all servers
+    atexit.register(connections_manager.disconnect_all)
+
+    connections = get_initialized_connections()
+
+    # Set the connections for disconnecting all at exit and possible other uses
+    # @DrMatthiasArnold we could also make the ConnectionManager asyncronous
+    # to enable adding new connections and in general, to enable runnig the app asyncronously
+    # based on an initial configuration file
+    connections_manager.set_connections(connections)
+
+    functional_units = connections.functional_units
 
     # session state
     functional_unit_names = list(map(lambda functional_unit: functional_unit.at_name, functional_units))
@@ -686,20 +749,22 @@ def main():
             empty(container_events)
             update_events(container_events, selected_functional_unit.device)
             
-        # update loop
-        index = 5
-        while(True):
-            update_state(container_state, selected_functional_unit)
-            update_functions(function_containers)
-            update_events(container_events, selected_functional_unit)
-            update_active_program(progress_container, selected_functional_unit)
-            update_asset_management(container_device, container_map, container_components, selected_functional_unit.device)
-            index += 1
-            if index >= 5:
-                index = 0
-                update_charts(container_chart, selected_functional_unit, True)
-                update_result_set(container_results, selected_functional_unit)
-            time.sleep(1)
+        def update_loop():
+            index = 5
+            while(True):
+                update_state(container_state, selected_functional_unit)
+                update_functions(function_containers)
+                update_events(container_events, selected_functional_unit)
+                update_active_program(progress_container, selected_functional_unit)
+                update_asset_management(container_device, container_map, container_components, selected_functional_unit.device)
+                index += 1
+                if index >= 5:
+                    index = 0
+                    update_charts(container_chart, selected_functional_unit, True)
+                    update_result_set(container_results, selected_functional_unit)
+                time.sleep(1)
+
+        update_loop()
 
 if __name__ == '__main__':
     main()
