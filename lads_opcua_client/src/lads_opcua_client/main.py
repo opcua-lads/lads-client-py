@@ -744,6 +744,8 @@ class AnalogItem(SubscribedVariable):
         if self.engineering_units is not None:
             if isinstance(self.engineering_units, ua.EUInformation):
                 result = self.engineering_units.DisplayName.Text
+                if result is None:
+                    return ""
                 return "%" if " or pct" in result else result
         return ""
 
