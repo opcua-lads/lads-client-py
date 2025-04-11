@@ -285,9 +285,12 @@ def update_charts(container, functional_unit: lads.FunctionalUnit, use_plotly=Tr
                 position = pos_left - 0.2 * (index - 1) if left else pos_right + 0.2 * ((index - 1) - count / 2)
                 position = 0 if position < 0 else 1 if position > 1 else position
                 yaxis_dict = dict(
-                    title = f"{function.display_name} [{analog_item.eu}]",
-                    titlefont = dict(color=color),
-                    tickfont = dict(color=color),
+                    title = dict(
+                        text = f"{function.display_name} [{analog_item.eu}]",
+                        font = dict(
+                            color = color
+                        )
+                    )
                 )
                 if index > 1:
                     yaxis_dict["anchor"] = "x"
