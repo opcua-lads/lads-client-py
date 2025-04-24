@@ -11,13 +11,18 @@ import asyncio
 import logging
 import pandas as pd
 import datetime as dt
-from typing import Type, NewType, Any, Self, Tuple, Set
+from typing import List, Type, NewType, Any, Self, Tuple, Set
 from asyncua import Client, ua, Node
 from asyncua.common.subscription import DataChangeNotif
 from asyncua.common.events import Event
 from asyncua.common.ua_utils import is_subtype, get_node_supertypes
 from enum import IntEnum
 from queue import Queue
+
+AFOSupport = True
+
+if AFOSupport:
+    from lads_afo import DictionaryEntry, get_entry
 
 _logger = logging.getLogger(__name__)
 
@@ -209,7 +214,8 @@ class Server(LADSTypes):
             item = self.call_async_queue.get()
             if item is not None:
                 try:
-                    await item
+                    result = await item
+                    _logger.debug(f"Evaluated item {item} with result {result}")
                 except Exception as error:
                     _logger.debug(error)
         await asyncio.sleep(0.01)
@@ -325,16 +331,64 @@ class LADSNode(Node):
     
     async def init(self, server: Server):
         self.server: Server = server
-        (self.browse_name, self._display_name, self.description)  = await asyncio.gather(
+        (self.browse_name, self._display_name, self.description, self.dictionary_entries)  = await asyncio.gather(
             self.read_browse_name(),
             self.read_display_name(),
-            self.read_description()
+            self.read_description(),
+            self.read_dictionary_entries()
         )
+        if AFOSupport:
+            self._dictionary_entry_objects = None
+            self._dcitionary_entries_as_markdown = None
         msg = f"Initializing {self.__class__.__name__}({self.display_name})"
         _logger.info(msg)
 
     async def finalize_init(self):
         pass
+
+    ###################################################
+    # Work around for buggy _to_nodeid() implementation
+    # Issue number: TBD
+    async def get_references(
+        self,
+        refs: int = ua.ObjectIds.References,
+        direction: ua.BrowseDirection = ua.BrowseDirection.Both,
+        nodeclassmask: ua.NodeClass = ua.NodeClass.Unspecified,
+        includesubtypes: bool = True,
+        result_mask: ua.BrowseResultMask = ua.BrowseResultMask.All
+    ) -> List[ua.ReferenceDescription]:
+        """
+        returns references of the node based on specific filter defined with:
+
+        refs = ObjectId of the Reference
+        direction = Browse direction for references
+        nodeclassmask = filter nodes based on specific class
+        includesubtypes = If true subtypes of the reference (ref) are also included
+        result_mask = define what results information are requested
+        """
+        def _to_nodeid(nodeid: int):
+            if nodeid <= 255:
+                return ua.TwoByteNodeId(nodeid)
+            elif nodeid <= 65535:
+                return ua.FourByteNodeId(nodeid)
+            else:
+                return ua.NumericNodeId(nodeid)
+
+        desc = ua.BrowseDescription()
+        desc.BrowseDirection = direction
+        desc.ReferenceTypeId = _to_nodeid(refs)
+        desc.IncludeSubtypes = includesubtypes
+        desc.NodeClassMask = nodeclassmask
+        desc.ResultMask = result_mask
+        desc.NodeId = self.nodeid
+        params = ua.BrowseParameters()
+        params.View.Timestamp = ua.get_win_epoch()
+        params.NodesToBrowse.append(desc)
+        params.RequestedMaxReferencesPerNode = 0
+        results = await self.session.browse(params)
+        references = await self._browse_next(results)
+        return references
+
 
     @property
     def display_name(self) -> str:
@@ -417,10 +471,47 @@ class LADSNode(Node):
     
     async def call_lads_method(self, name: str, *args: Any) -> ua.StatusCode:
         try:
+            print(f"Call method {name} with args {args}")
             return await self.call_method(ua.QualifiedName(name, self.server.ns_LADS), *args)
         except Exception as error:
             _logger.error(error)
             return ua.StatusCodes.BadNotImplemented
+        
+    if AFOSupport:
+        @property
+        def dictionary_entry_objects(self) -> list[DictionaryEntry]:
+            if self._dictionary_entry_objects is None:
+                self._dictionary_entry_objects: list[DictionaryEntry] = list(filter(lambda entry: entry is not None, map(lambda dictionary_entry: get_entry(dictionary_entry), self.dictionary_entries)))
+
+            return self._dictionary_entry_objects 
+
+    @property
+    def dictionary_entries_as_markdown(self) -> str:
+        if AFOSupport:
+            if self._dcitionary_entries_as_markdown is None:
+                definitions: list[str] = []
+                for entry in self.dictionary_entry_objects:
+                    if entry is not None:
+                        markdown = f"**{entry.prefLabel}**  \r\n{entry.definition}  "
+                    definitions.append(markdown)
+                self._dcitionary_entries_as_markdown = "\n\r".join(definitions)
+            return self._dcitionary_entries_as_markdown
+        else:
+            return ""
+
+    async def read_dictionary_entries(self) -> list[str]:
+        if AFOSupport:
+            try:
+                nodes = await self.get_referenced_nodes(refs = ua.ObjectIds.HasDictionaryEntry, direction = ua.BrowseDirection.Forward, nodeclassmask = ua.NodeClass.Object)
+                if  len(nodes) == 0:
+                    return []
+                names = list(map(lambda node: node.nodeid.Identifier, nodes))
+                return names
+            except Exception as err:
+                print(f"Exception when reading dictionary entries {err}")
+                return []
+        else:
+            return []
         
 class Method(LADSNode):
     @classmethod
@@ -579,6 +670,8 @@ class AnalogItem(SubscribedVariable):
         if self.engineering_units is not None:
             if isinstance(self.engineering_units, ua.EUInformation):
                 result = self.engineering_units.DisplayName.Text
+                if result is None: 
+                    return ""
                 return "%" if " or pct" in result else result
         return ""
 
@@ -745,12 +838,11 @@ class FunctionalStateMachine(StateMachine):
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(FunctionalStateMachine, node, server.FiniteStateMachineType, server)
     
-    def start_program(self, program_template: str, properties: pd.DataFrame, supervisory_job_id: str, supervisory_task_id: str, samples: pd.DataFrame):
+    def buildProperties(self, properties: pd.DataFrame) -> list:
         key_value_list = None
         for index, row in properties.iterrows():
             key = str(row["Key"])
             value =str(row["Value"])
-            # value =ua.Variant(Value=str(row["Value"]),VariantType=ua.VariantType.String)
             key_value = self.server.KeyValueType(
                 key,
                 value,
@@ -758,6 +850,11 @@ class FunctionalStateMachine(StateMachine):
             if key_value_list is None:
                 key_value_list = []
             key_value_list.append(key_value)
+        return key_value_list
+
+    
+    def start_program(self, program_template: str, properties: pd.DataFrame, supervisory_job_id: str, supervisory_task_id: str, samples: pd.DataFrame):
+        key_value_list = self.buildProperties(properties)
         sample_info_list = None
         for index, row in samples.iterrows():
             sample_info = self.server.SampleInfoType(
@@ -776,10 +873,11 @@ class FunctionalStateMachine(StateMachine):
                                               supervisory_task_id, 
                                               sample_info_list))
             
-    def start(self):
-        self.call_async(self.call_lads_method("Start"))
+    def start(self, properties: pd.DataFrame):
+        key_value_list = self.buildProperties(properties)
+        self.call_async(self.call_lads_method("Start", key_value_list))
 
-    async def stop(self)-> ua.StatusCode:
+    def stop(self):
         self.call_async(self.call_lads_method("Stop"))
 
 class LADSSet(LADSNode):
@@ -1448,6 +1546,10 @@ class AnalogScalarSensorFunctionWithCompensation(AnalogScalarSensorFunction):
         await super().init(server)        
         self.compensation_value = await get_lads_analog_item(self, "CompensationValue")
 
+    @property
+    def variables(self) ->list[BaseVariable]:
+        return super().variables + [self.compensation_value]
+
 class AnalogArraySensorFunction(AnalogScalarSensorFunction):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1768,7 +1870,7 @@ def main():
     _logger.warning(f"Connected to {server}")
     while False:
         fu = server.devices[0].functional_units[0]
-        sm: FunctionalStateMachine = fu.state_machine
+        sm: FunctionalStateMachine = fu.functional_unit_state
         sm.start_program("MyTemplate", 
                          pd.DataFrame({"Key": ["Temperature"], "Value": [37.0]}), 
                          "MyJob", 
