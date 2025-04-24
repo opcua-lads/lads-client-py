@@ -114,3 +114,4 @@ def get_all_entries() -> List[DictionaryEntry]:
     Returns a list of all DictionaryEntry instances.
     """
     return list(_DICTIONARY_ENTRIES.values())
+

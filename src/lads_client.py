@@ -1020,7 +1020,6 @@ class FunctionalStateMachine(StateMachine):
             key_value_list.append(key_value)
         return key_value_list
 
-    
     def start_program(self, program_template: str, properties: pd.DataFrame, supervisory_job_id: str, supervisory_task_id: str, samples: pd.DataFrame):
         key_value_list = self.buildProperties(properties)
         sample_info_list = None
