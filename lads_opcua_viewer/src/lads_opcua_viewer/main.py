@@ -473,7 +473,7 @@ def show_asset_management(container, device: lads.Device):
 def update_asset_management(container_device, container_map, container_components, device: lads.Device):
     with container_device:
         state_vars = device.state_machine_variables + device.location_variables
-        with st.expander(f"**Status {device.display_name}**", expanded=True):  
+        with st.expander(f"**Status {device.display_name}**", expanded=True): 
             show_variables_table(state_vars)
     with container_map:
         lat = []
@@ -525,7 +525,7 @@ def show_components(component: lads.Component, expanded_count):
                         r = start - limit
                         x = value / r + limit if abs(r) > 0 else 0
                         st.progress(x, s)  
-                    except:
+                    except Exception as e:
                         pass
 
     if component.components is not None:
@@ -713,7 +713,12 @@ def main():
         with col_cmd:
             state_machine = selected_functional_unit.functional_unit_state
             methods = list(filter(lambda method: method != "StartProgram", state_machine.method_names ))
-            cmd = st.selectbox("Command", options=methods, index=None, label_visibility="collapsed", key=state_machine.nodeid, on_change=call_state_machine_method(state_machine), placeholder="Choose a command")
+            cmd = st.selectbox("Command", options=methods, index=None, label_visibility="collapsed", placeholder="Choose a command")
+            if cmd == "Start":
+                state_machine.start(pd.DataFrame())
+            else:
+                state_machine.call_method_by_name(cmd)
+
         with col_state:
             container_state = show_state(col_state, selected_functional_unit)
 
