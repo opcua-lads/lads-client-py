@@ -92,7 +92,7 @@ def load_dictionary_csv(file_path: str) -> Dict[str, DictionaryEntry]:
 # project_root/
 #   data/AFO_Dictionary-2025_03.csv
 #   src/lads_afo.py
-_csv_file_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'AFO_Dictionary-2025_03.csv')
+_csv_file_path = os.path.join(os.path.dirname(__file__), '../..', 'data', 'AFO_Dictionary-2025_03.csv')
 try:
     _DICTIONARY_ENTRIES: Dict[str, DictionaryEntry] = load_dictionary_csv(_csv_file_path)
     print(f"Loaded {_DICTIONARY_ENTRIES.__len__()} dictionary entries from CSV.")
@@ -114,3 +114,4 @@ def get_all_entries() -> List[DictionaryEntry]:
     Returns a list of all DictionaryEntry instances.
     """
     return list(_DICTIONARY_ENTRIES.values())
+
