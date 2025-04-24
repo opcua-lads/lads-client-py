@@ -40,7 +40,7 @@ from queue import Queue
 AFOSupport = True
 
 if AFOSupport:
-    from lads_afo import DictionaryEntry, get_entry
+    from .lads_afo import DictionaryEntry, get_entry
 
 _logger = logging.getLogger(__name__)
 

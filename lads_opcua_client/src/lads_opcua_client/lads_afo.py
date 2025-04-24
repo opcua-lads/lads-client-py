@@ -1,6 +1,7 @@
 import os
 import csv
 from typing import Dict, Optional, List
+import importlib.resources
 
 class DictionaryEntry:
     def __init__(self, termIRI: str, prefLabel: str, altLabels: str = "",
@@ -92,7 +93,15 @@ def load_dictionary_csv(file_path: str) -> Dict[str, DictionaryEntry]:
 # project_root/
 #   data/AFO_Dictionary-2025_03.csv
 #   src/lads_afo.py
-_csv_file_path = os.path.join(os.path.dirname(__file__), '../..', 'data', 'AFO_Dictionary-2025_03.csv')
+#_csv_file_path = os.path.join(os.path.dirname(__file__), '../..', 'data', 'AFO_Dictionary-2025_03.csv')
+try:
+    with importlib.resources.path('lads_opcua_client.data', 'AFO_Dictionary-2025_03.csv') as csv_path:
+        _csv_file_path = str(csv_path)
+        print(f"CSV file path: {_csv_file_path}")
+except Exception as e:
+    print(f"Error locating dictionary CSV: {e}")
+    _csv_file_path = None
+
 try:
     _DICTIONARY_ENTRIES: Dict[str, DictionaryEntry] = load_dictionary_csv(_csv_file_path)
     print(f"Loaded {_DICTIONARY_ENTRIES.__len__()} dictionary entries from CSV.")
