@@ -12,8 +12,6 @@ import streamlit as st
 import datetime as dt
 import pandas as pd
 import time, math
-import sys
-import matplotlib as plt
 import plotly.graph_objects as go
 from typing import Tuple
 import lads_opcua_client as lads
@@ -159,14 +157,14 @@ def show_function_set(container, path: str, function_set: lads.FunctionSet, cont
                                 for controller_parameter in function.controller_parameters:
                                     add_variable_value_input(controller_parameter.target_value, controller_parameter)
                                 current_mode = function.current_mode
-                                mode = st.selectbox(label=current_mode.display_name, on_change=write_variable_value(current_mode), options=function.modes, label_visibility="collapsed", key=current_mode.nodeid, placeholder="Choose a mode")
+                                mode = st.selectbox(label=current_mode.display_name, on_change=write_variable_value(current_mode), options=function.modes, label_visibility="collapsed", key=current_mode.nodeid, placeholder="Choose a mode", help=current_mode.dictionary_entries_as_markdown)
                             elif isinstance(function, lads.DiscreteControlFunction):
                                 target_value = function.target_value
-                                cmd = st.selectbox(label="Command", options=target_value.values_as_str, index=None, label_visibility="collapsed", key=target_value.nodeid, on_change=write_discrete_variable_value(target_value), placeholder="Choose a value")
+                                cmd = st.selectbox(label="Command", options=target_value.values_as_str, index=None, label_visibility="collapsed", key=target_value.nodeid, on_change=write_discrete_variable_value(target_value), placeholder="Choose a value", help=target_value.dictionary_entries_as_markdown)
                             method_names = function.state_machine.method_names
                             if len(method_names) > 0:
                                 key = function.unique_name
-                                cmd = st.selectbox(label="Command", options=method_names, index=None, label_visibility="collapsed", key=key, on_change=call_function_state_machine_method(function), placeholder="Choose a command")
+                                cmd = st.selectbox(label="Command", options=method_names, index=None, label_visibility="collapsed", key=key, on_change=call_function_state_machine_method(function), placeholder="Choose a command", help=function.state_machine.dictionary_entries_as_markdown)
                     with col_sp:
                         container_sp = st.empty()
                     with col_pv:
@@ -186,49 +184,49 @@ def update_functions(function_containers: dict):
             color = function_state_color(function)
             with sp_col:
                 if function.target_value is not None:
-                    st.write(f":{color}[**{format_value(0.001 * function.target_value.value)}** s]")
+                    st.markdown(f":{color}[**{format_value(0.001 * function.target_value.value)}** s]", help=function.target_value.dictionary_entries_as_markdown)
             with pv_col: 
                 if function.current_value is not None:
-                    st.write(f":blue[**{format_value(0.001 * function.current_value.value)}** s]")
+                    st.markdown(f":blue[**{format_value(0.001 * function.current_value.value)}** s]", help=function.current_value.dictionary_entries_as_markdown)
                 if function.difference_value is not None:
-                    st.write(f":blue[**{format_value(0.001 * function.difference_value.value)}** s]")
+                    st.markdown(f":blue[**{format_value(0.001 * function.difference_value.value)}** s]", help=function.difference_value.dictionary_entries_as_markdown)
         elif isinstance(function, lads.AnalogControlFunction):
             color = function_state_color(function)
             with sp_col:
-                st.write(f":{color}[**{format_value(function.target_value.value)}** {function.target_value.eu}]")
+                st.markdown(f":{color}[**{format_value(function.target_value.value)}** {function.target_value.eu}]", help=function.target_value.dictionary_entries_as_markdown)
                 if isinstance(function, lads.AnalogControlFunctionWithTotalizer):
-                    st.write(":gray[Totalizer]")
+                    st.markdown(":gray[Totalizer]")
             with pv_col: 
-                st.write(f":{variable_status_color(function.current_value)}[**{format_value(function.current_value.value)}** {function.current_value.eu}]")
+                st.markdown(f":{variable_status_color(function.current_value)}[**{format_value(function.current_value.value)}** {function.current_value.eu}]", help=function.current_value.dictionary_entries_as_markdown)
                 if isinstance(function, lads.AnalogControlFunctionWithTotalizer):
-                    st.write(f":blue[**{format_value(function.totalized_value.value)}** {function.totalized_value.eu}]")
+                    st.markdown(f":blue[**{format_value(function.totalized_value.value)}** {function.totalized_value.eu}]", help=function.totalized_value.dictionary_entries_as_markdown)
         elif isinstance(function, lads.TwoStateDiscreteControlFunction) or isinstance(function, lads.MultiStateDiscreteControlFunction) :
             color = function_state_color(function)
             with sp_col:
-                st.write(f":{color}[**{function.target_value.value_str}**]")
+                st.markdown(f":{color}[**{function.target_value.value_str}**]", help=function.target_value.dictionary_entries_as_markdown)
             with pv_col: 
-                st.write(f":{variable_status_color(function.current_value)}[**{function.current_value.value_str}**]")
+                st.markdown(f":{variable_status_color(function.current_value)}[**{function.current_value.value_str}**]", help=function.current_state.dictionary_entries_as_markdown)
         elif isinstance(function, lads.AnalogScalarSensorFunction):
             if isinstance(function, lads.AnalogScalarSensorFunctionWithCompensation):
                 if function.compensation_value is not None:
                     with sp_col:
-                        st.write(f":gray[{format_value(function.compensation_value.value)} {function.compensation_value.eu}]")
-            with pv_col: 
-                st.write(f":{variable_status_color(function.sensor_value)}[**{format_value(function.sensor_value.value)}** {function.sensor_value.eu}]")
+                        st.markdown(f":gray[{format_value(function.compensation_value.value)} {function.compensation_value.eu}]", help=function.compensation_value.dictionary_entries_as_markdown)
+            with pv_col:
+                st.markdown(f":{variable_status_color(function.sensor_value)}[**{format_value(function.sensor_value.value)}** {function.sensor_value.eu}]", help=function.sensor_value.dictionary_entries_as_markdown)
 
         elif isinstance(function, lads.TwoStateDiscreteSensorFunction) or isinstance(function, lads.MultiStateDiscreteSensorFunction):
             with pv_col: 
-                st.write(f":{variable_status_color(function.sensor_value)}[**{function.sensor_value.value_str}**]")
+                st.markdown(f":{variable_status_color(function.sensor_value)}[**{function.sensor_value.value_str}**]", help=function.sensor_value.dictionary_entries_as_markdown)
         elif isinstance(function, lads.CoverFunction):
             with pv_col: 
-                st.write(f":{variable_status_color(function.current_state)}[**{function.current_state.value_str}**]")
+                st.markdown(f":{variable_status_color(function.current_state)}[**{function.current_state.value_str}**]", help=function.current_state.dictionary_entries_as_markdown)
         elif isinstance(function, lads.StartStopControlFunction):
             with pv_col: 
-                st.write(f":{function_state_color(function)}[**{function.current_state.value_str}**]")
+                st.markdown(f":{function_state_color(function)}[**{function.current_state.value_str}**]", help=function.current_state.dictionary_entries_as_markdown)
         elif isinstance(function, lads.MulitModeControlFunction):
             for controller_parameter in function.controller_parameters:
                 with sp_col:
-                    st.write(f":{function_state_color(function)}[**{format_value(controller_parameter.target_value.value)}** {controller_parameter.target_value.eu}]")
+                    st.markdown(f":{function_state_color(function)}[**{format_value(controller_parameter.target_value.value)}** {controller_parameter.target_value.eu}]", help=controller_parameter.target_value.dictionary_entries_as_markdown)
                 with pv_col: 
                     st.write(f":{variable_status_color(controller_parameter.current_value)}[**{format_value(controller_parameter.current_value.value)}** {controller_parameter.current_value.eu}]")
 
@@ -503,7 +501,7 @@ def show_components(component: lads.Component, expanded_count):
     with st.expander(f"**{component.__class__.__name__} {component.display_name}**", expanded=expanded_count > 0):
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.write("Nameplate")
+            st.markdown("Nameplate", help=component.dictionary_entries_as_markdown)
             show_variables_table(component.name_plate_variables)
         with col2:
             if component.operation_counters is not None:
@@ -537,12 +535,15 @@ def show_components(component: lads.Component, expanded_count):
 # MARK: show_program_template_set
 def show_program_template_set(container, functional_unit: lads.FunctionalUnit):
     with container.container():
-        st.write("**Templates**")
+        st.markdown("**Templates**")
         program_manager = functional_unit.program_manager
         if program_manager is None: 
             return
         for program_template in program_manager.program_templates:
             with st.expander(program_template.display_name, expanded=False):
+                definitions = program_template.dictionary_entries_as_markdown
+                if len(definitions) > 0:
+                    st.markdown(":gray[Definitions]", help=program_template.dictionary_entries_as_markdown)
                 show_variables_table(program_template.variables)
 
 # MARK: show_state
@@ -555,7 +556,7 @@ def show_state(container, functional_unit: lads.FunctionalUnit) -> any:
 def update_state(container, functional_unit: lads.FunctionalUnit) -> bool:
     current_state_var = functional_unit.current_state
     with container:
-        st.write(f":{state_color(current_state_var)}[**{current_state_var.value_str}**]")
+        st.markdown(f":{state_color(current_state_var)}[**{current_state_var.value_str}**]", help=current_state_var.dictionary_entries_as_markdown)
     return False
 
 # MARK: show_active_program
@@ -644,6 +645,9 @@ def update_result_set(container, functional_unit: lads.FunctionalUnit):
             return
         for result in program_manager.results:
             with st.expander(result.display_name, expanded=False):
+                definitions = result.dictionary_entries_as_markdown
+                if len(definitions) > 0:
+                    st.markdown(":gray[Definitions]", help=result.dictionary_entries_as_markdown)
                 show_variables_table(result.variables)
                 if len(result.variable_set.variables) > 0:
                     st.write("Result data")
