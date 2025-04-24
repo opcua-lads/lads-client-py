@@ -1998,10 +1998,16 @@ class Connection:
         finally:
             loop.run_until_complete(loop.shutdown_asyncgens())
             loop.close()
-        #asyncio.run(self._run_connection_async())
 
     def connect(self):
         """Starts the connection thread (non-asynchronous)."""
+        if self.thread.is_alive():
+            return
+
+        if not self.thread.is_alive() and self.thread._started.is_set():
+            self.thread = threading.Thread(
+                target=self._run_connection, daemon=True, name=f"LADS OPC UA Connection {self.url}")
+
         self.running = True
         self.thread.start()
     

@@ -6,11 +6,11 @@ build-backend = "hatchling.build"
 name = "lads_opcua_client"
 version = "0.0.1"
 dependencies = [
-  "pandas==2.2.2",
-  "asyncua==1.1.5",
-  "typing_extensions==4.12.2",
+  "pandas>=2.2.2",
+  "asyncua>=1.1.5",
+  "typing_extensions>=4.12.2",
 ]
-requires-python = ">=3.6"
+requires-python = ">=3.12"
 authors = [
   { name = "Dr. Mathias Arnold", email = "m.arnold@aixengineers.de" },
   { name = "Dr. Ricardo Cunha", email = "cunha@iuta.de" },
