@@ -1,10 +1,25 @@
-"""
- *
- * Copyright (c) 2023 Dr. Matthias Arnold, AixEngineers, Aachen, Germany.
- *
- * This source code is licensed under the MIT license found in the
- * LICENSE file in the root directory of this source tree.
- *
+"""Python LADS OPC UA Client
+    
+    This library provides a Python OPC UA client for the LADS OPC UA server.
+    The client is based on the asyncua library and provides a set of classes to interact with a LADS OPC UA server.
+    The classes are based on the LADS OPC UA model, providing a high level interface.
+
+    The library provides the following classes:
+    - Server: Represents a LADS OPC UA server with a set of devices and functional units.
+    - SubscriptionHandler: Handles data change and event notifications for subscribed variables.
+    - LADSNode: Represents a node in the LADS OPC UA model.
+    - BaseVariable: Represents a variable in the LADS OPC UA model.
+    - Device: Represents a device in the LADS OPC UA model.
+    - Function: Represents a function in the LADS OPC UA model.
+    - FunctionSet: Represents a set of functions in the LADS OPC UA model.
+    - FunctionalUnit: Represents a functional unit in the LADS OPC UA model.
+    - Connection: Represents a connection to a LADS OPC UA server.
+    - Connections: Represents a set of connections to LADS OPC UA servers.
+
+    Copyright (c) 2023 Dr. Matthias Arnold, AixEngineers, Aachen, Germany.
+    
+    This source code is licensed under the MIT license found in the
+    LICENSE file in the root directory of this source tree.
 """
 
 import asyncio
@@ -33,10 +48,12 @@ Component = NewType("Component", LADSNode)
 Device = NewType("Device", Component)
 FunctionalUnit = NewType("FunctionalUnit", LADSNode)
 Function = NewType("Function", LADSNode)
-      
+
+
+# MARK: Node IDs
 # pylint: disable=C0103
 class LADSObjectIds(IntEnum):
-    """LADS specfic numerical node-ids"""
+    """LADS specific numerical node-ids"""
     DeviceType = 1002
     ComponentSetType = 1025
     ComponentType = 1024
@@ -69,20 +86,24 @@ class LADSObjectIds(IntEnum):
     VariableSetType = 1041
 
 class MachineryObjectIds(IntEnum):
-    """Machinery specfic numerical node-ids"""
+    """Machinery specific numerical node-ids"""
     MachineryItemIdentificationType = 1004
     MachineryOperationCounterType = 1009
     MachineryLifeTimeCounterType = 1015
 
 class DIObjectIds(IntEnum):
+    """DI specific numerical node-ids"""
     DeviceHealthEnumeration = 6244
     LifetimeVariableType = 468
 
+# MARK: SubscriptionLevel
 class SubscriptionLevel(IntEnum):
+    """Subscription levels for variables"""
     Never = 0
     Temporary = 1
     Permanent = 2
 
+# MARK: LADSTypes
 class LADSTypes:
 
     def __init__(self, client: Client):
@@ -177,8 +198,22 @@ class LADSTypes:
 
     def get_lads_node(self, id: int) -> Node | None:
         return self.client.get_node(ua.NodeId(int(id), self.ns_LADS))
-    
+
+# MARK: Server
 class Server(LADSTypes):
+    """
+    Represents a LADS OPC UA server with a set of devices and functional units.
+
+    Attributes:
+        client: Client - the client object used to connect to the server
+        name: str - the name of the server
+        devices: list[Device] - the devices in the server
+        initialized: bool - True if the server has been initialized
+        running: bool - True if the server is running
+        call_async_queue: Queue - queue for async calls
+        functional_units: list[FunctionalUnit] - all functional units in the server
+    """
+
     def __init__(self, client: Client):
         super().__init__(client)
         self.name = "Unknown Server"
@@ -186,6 +221,13 @@ class Server(LADSTypes):
         self.initialized = False
         self.running = True
         self.call_async_queue = Queue()
+
+    async def _disconnect(self):
+        print(f"Disconnecting from {self.name}")
+        await self.client.disconnect()
+        self.running = False
+        self.initialized = False
+        print("Disconnected successfully.")
 
     async def init(self) -> dict:
         data_types = await super().init()
@@ -266,7 +308,25 @@ def variant_value_to_str(variant: ua.Variant) -> str:
 def remove_none(nodes: list[Node]) -> list[Node]:
     return list(filter(lambda node: node is not None, nodes))
 
+# MARK: SubscriptionHandler
 class SubscriptionHandler(object):
+    """
+    Handles data change and event notifications for subscribed variables.
+
+    Attributes:
+        subscription: Subscription - the subscription object from the asyncua library.
+        subscribed_variables: dict[ua.NodeId, BaseVariable] - the subscribed variables as a dictionary.
+        event_node: LADSNode - the event LADS node.
+        events: pd.DataFrame - the events as a pandas dataframe.
+        last_event_update: dt.datetime - the last event update time.
+    
+    Methods:
+        subscribe_data_change(self, server: Server, nodes: list[BaseVariable], period: float = 500) - subscribe to data change notifications.
+        subscribe_events(self, server: Server, node: Node, period: float = 500) - subscribe to event notifications.
+        datachange_notification(self, node: Node, val: Any, data: DataChangeNotif) - handle data change notifications.
+        event_notification(self, event: Event) - Notification of an event.
+        status_change_notification(self, status: Any) - Notification of a status change.
+    """
 
     def __init__(self) -> None:
         super().__init__()
@@ -277,6 +337,15 @@ class SubscriptionHandler(object):
         self.last_event_update = dt.datetime.now()
 
     async def subscribe_data_change(self, server: Server, nodes: list[BaseVariable], period: float = 500):
+        """
+        Subscribe to data change.
+
+        Args:
+            server: Server - the server object.
+            nodes: list[BaseVariable] - the variables to subscribe to.
+            period: float - the subscription period.
+        """
+
         if len(nodes) == 0: 
             return
         if self.subscription is None:
@@ -286,12 +355,30 @@ class SubscriptionHandler(object):
         return result
  
     async def subscribe_events(self, server: Server, node: Node, period: float = 500):
+        """
+        Subscribe to events.
+
+        Args:
+            server: Server - the server object.
+            node: Node - the event node.
+            period: float - the subscription period.
+        """
+        
         if self.subscription is None:
             self.subscription = await server.client.create_subscription(period, self)
         self.event_node: LADSNode = node
         return await self.subscription.subscribe_events(node)        
  
     async def datachange_notification(self, node: Node, val: Any, data: DataChangeNotif):
+        """
+        Notification of a data change.
+
+        Args:
+            node: Node - the node.
+            val: Any - the value.
+            data: DataChangeNotif - the data change notification.
+        """
+
         try:
             variable: Node = self.subscribed_variables[node.nodeid]
             variable.data_change_notification(data)
@@ -299,6 +386,13 @@ class SubscriptionHandler(object):
             _logger.error(f"data_change_notification error {error}")
 
     async def event_notification(self, event: Event):
+        """
+        Notification of an event.
+
+        Args:
+            event: Event - the event.
+        """
+
         # obviously there is a bug in the library subscription.py
         #   async def _call_event(self, eventlist: ua.EventNotificationList) -> None: 
         # ua.EventNotificationList has always only one element, even if multiple events are sent..
@@ -319,9 +413,48 @@ class SubscriptionHandler(object):
         self.last_event_update = key
 
     async def status_change_notification(self, status: Any):
+        """
+        Notification of a status change.
+
+        Args:
+            status: Any - the status.
+        """
+
         print(status)
 
+# MARK: LADSNode
 class LADSNode(Node):
+    """
+    Represents a node in the LADS OPC UA model.
+
+    Attributes:
+        server: Server - the server object.
+        browse_name: ua.QualifiedName - the browse name of the node.
+        display_name: str - the display name of the node.
+        description: str - the description of the node.
+        unique_name: str - the unique name of the node.
+        variables: list[BaseVariable] - the variables of the node.
+        subscribed_variables: list[BaseVariable] - the subscribed variables of the node.
+        permanent_subscribed_variables: list[BaseVariable] - the permanent subscribed variables of the node.
+        temporary_subscribed_variables: list[BaseVariable] - the temporary subscribed variables of the node.
+    
+    Methods:
+        promote(cls, node: Node, server: Server) -> Self - promote a asyncua node to a LADSNode.
+        variable_named(self, name: str) -> BaseVariable - get a variable by name.
+        update_variables_async(self) - update the variables of the node asynchronously.
+        update_variables(self) - update the variables of the node.
+        call_async(self, func) - call a function asynchronously.
+        get_child_or_none(self, name: ua.QualifiedName) -> Node - get a child node or None by name.
+        get_di_child(self, name: str) -> Node - get a DI child node by name.
+        get_di_variable(self, name: str) -> BaseVariable - get a DI variable by name.
+        get_machinery_child(self, name: str) -> Node - get a machinery child node by name.
+        get_machinery_variable(self, name: str) -> BaseVariable - get a machinery variable by name.
+        get_lads_child(self, name: str) -> Node - get a LADS child node by name.
+        get_lads_variable(self, name: str) -> BaseVariable - get a LADS variable by name.
+        get_child_objects(self, parent: Node = None) -> list[Node] - get all child objects of a node or parent node.
+        call_lads_method(self, name: str, *args: Any) -> ua.StatusCode - call a LADS method by name.
+    """
+
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(LADSNode, node, server.BaseObjectType, server)
@@ -330,6 +463,13 @@ class LADSNode(Node):
         return f"{self.__class__.__name__}({self.display_name})"
     
     async def init(self, server: Server):
+        """
+        Initialize the LADSNode.
+
+        Args:
+            server: Server - the server object.
+        """
+
         self.server: Server = server
         (self.browse_name, self._display_name, self.description, self.dictionary_entries)  = await asyncio.gather(
             self.read_browse_name(),
@@ -471,7 +611,7 @@ class LADSNode(Node):
     
     async def call_lads_method(self, name: str, *args: Any) -> ua.StatusCode:
         try:
-            print(f"Call method {name} with args {args}")
+            _logger.debug(f"Call method {name} with args {args}")
             return await self.call_method(ua.QualifiedName(name, self.server.ns_LADS), *args)
         except Exception as error:
             _logger.error(error)
@@ -518,7 +658,24 @@ class Method(LADSNode):
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(Method, node, None, server)
 
+# MARK: BaseVariable
 class BaseVariable(LADSNode):
+    """"
+    Represents a variable in the LADS OPC UA model.
+
+    Attributes:
+        alternate_display_name: str - an alternate name for the variable
+        subscription_level: SubscriptionLevel - the subscription level of the variable
+        data_value: ua.DataValue - the current value of the variable
+        data_type: ua.VariantType - the data type of the variable
+        access_level: Set[ua.AccessLevel] - the access level of the variable
+        history: pd.DataFrame - the history of the variable
+        display_name: str - the display name of the variable
+        has_write_access: bool - True if the variable has write access
+        value: Any - the value of the variable
+        value_str: str - the value of the variable as a string
+    """
+
     alternate_display_name: str = None
     subscription_level = SubscriptionLevel.Never
     data_value: ua.DataValue
@@ -602,6 +759,7 @@ class BaseVariable(LADSNode):
             if len(self.history.index) > 600:
                 self.history = self.history.tail(-1)
 
+# MARK: SubscribedVariable
 class SubscribedVariable(BaseVariable):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -612,6 +770,7 @@ class SubscribedVariable(BaseVariable):
         if self.history is None:
             self.subscription_level = SubscriptionLevel.Temporary
 
+# MARK: NodeVersionVariable
 class NodeVersionVariable(SubscribedVariable):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -627,6 +786,7 @@ class NodeVersionVariable(SubscribedVariable):
         if self.set is None: return
         self.set.node_version_changed()
 
+# MARK: StateVariable
 class StateVariable(SubscribedVariable):
     alternate_display_name: str = None
 
@@ -641,7 +801,8 @@ class StateVariable(SubscribedVariable):
         s =  super().value_str
         l = s.split(":")
         return s if len(l) < 2 else l[1]
-    
+
+# MARK: AnalogItem
 class AnalogItem(SubscribedVariable):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -670,11 +831,12 @@ class AnalogItem(SubscribedVariable):
         if self.engineering_units is not None:
             if isinstance(self.engineering_units, ua.EUInformation):
                 result = self.engineering_units.DisplayName.Text
-                if result is None: 
+                if result is None:
                     return ""
                 return "%" if " or pct" in result else result
         return ""
 
+# MARK: Enumeration
 class Enumeration(SubscribedVariable):
     enum_strings: dict = {}
 
@@ -703,7 +865,8 @@ class Enumeration(SubscribedVariable):
             return self.enum_strings[int(self.value)]
         except:
             return "unknown"
-        
+
+# MARK: DiscreteVariable
 class DiscreteVariable(SubscribedVariable):
 
     @property
@@ -727,6 +890,7 @@ class DiscreteVariable(SubscribedVariable):
         except Exception as error:
             print(error)
 
+# MARK: TwoStateDiscrete
 class TwoStateDiscrete(DiscreteVariable):
     true_state: BaseVariable
     false_state: BaseVariable
@@ -754,6 +918,7 @@ class TwoStateDiscrete(DiscreteVariable):
     def values(self) -> list[ua.LocalizedText]:
         return [self.true_state.data_value.Value.Value, self.false_state.data_value.Value.Value]
 
+# MARK: MultiStateDiscrete
 class MultiStateDiscrete(DiscreteVariable):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -782,6 +947,7 @@ class MultiStateDiscrete(DiscreteVariable):
     def values(self) -> list[ua.LocalizedText]:
         return self.enum_strings.data_value.Value.Value
 
+# MARK: LifetimeCounter
 class LifetimeCounter(AnalogItem):
     limit_value: BaseVariable
     start_value: BaseVariable
@@ -802,6 +968,7 @@ class LifetimeCounter(AnalogItem):
             self.get_di_variable("WarningValues"),
         )
 
+# MARK: StateMachine
 class StateMachine(LADSNode):
     methods: list[Method] = []
     methods_dict: dict[str, Method]
@@ -833,6 +1000,7 @@ class StateMachine(LADSNode):
     def variables(self) -> list[BaseVariable]:
         return super().variables + [self.current_state]
 
+# MARK: FunctionalStateMachine
 class FunctionalStateMachine(StateMachine):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -880,6 +1048,7 @@ class FunctionalStateMachine(StateMachine):
     def stop(self):
         self.call_async(self.call_lads_method("Stop"))
 
+# MARK: LADSSet
 class LADSSet(LADSNode):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -941,13 +1110,15 @@ class LADSSet(LADSNode):
                 assert(len(nodes) == 1)
                 node = nodes[0]
                 self.children.remove(node)
-        
+
+# MARK: ComponentSet
 class ComponentSet(LADSSet):
     # since the Machinery type Components is not derived from LADS.SetType we need a different type check
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(ComponentSet, node, server.ComponentSetType, server)
-    
+
+# MARK: OperationCounters
 class OperationCounters(LADSNode):
     operation_cycle_counter: BaseVariable
     operation_duration: BaseVariable
@@ -971,6 +1142,7 @@ class OperationCounters(LADSNode):
     def variables(self) -> list[BaseVariable]:
         return remove_none([self.operation_cycle_counter, self.operation_duration, self.power_on_duration])
 
+# MARK: LifetimeCounters
 class LifetimeCounters(LADSNode):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -986,6 +1158,7 @@ class LifetimeCounters(LADSNode):
     def variables(self) -> list[Node]:
         return super().variables + self.lifetime_counters
 
+# MARK: Identification
 class Identification(LADSNode):
     asset_id: BaseVariable
     component_name: BaseVariable
@@ -1010,6 +1183,7 @@ class Identification(LADSNode):
     def variables(self) ->list[BaseVariable]:
         return self._variables
 
+# MARK: Component
 class Component(LADSNode):
     component_set: LADSSet = None
     device_health: Enumeration = None
@@ -1051,7 +1225,26 @@ class Component(LADSNode):
     def name_plate_variables(self) ->list[BaseVariable]:
         return self._variables if self.identification is None else self.identification.variables
 
+# MARK: Device
 class Device(Component):
+    """
+    Represents a device in the LADS OPC UA model.
+
+    Attributes:
+        device_state: StateMachine - State machine representing the device state.
+        machinery_item_state: StateMachine - State machine representing the machinery item state.
+        machinery_operation_mode: StateMachine - State machine representing the machinery operation mode.
+        location: SubscribedVariable - Location of the device.
+        hierarchical_location: SubscribedVariable - Hierarchical location of the device.
+        operational_location: SubscribedVariable - Operational location of the device.
+        state_machine_variables: list[BaseVariable] - List of state machine variables of the device.
+        location_variables: list[BaseVariable] - List of location variables of the device.
+        geographical_location: Tuple[float, float] - Geographical location of the device.
+        unique_name: str - Unique name of the device.
+        variables: list[BaseVariable] - List of variables of the device.
+        events: list[Event] - List of events of the device.
+    """
+
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(Device, node, server.DeviceType, server)
@@ -1141,13 +1334,32 @@ class Device(Component):
         else:
             return []
 
+# MARK: Function
 class Function(LADSNode):
+    """
+    Represents a function in the LADS OPC UA model.
+
+    Attributes:
+        functional_parent: LADSNode - Parent of the function.
+        unique_name: str - Unique name of the function.
+        functions: list[Function] - List of functions.
+        variables: list[BaseVariable] - List of variables.
+        all_variables: list[BaseVariable] - List of all variables.
+    """
+
     functional_parent: LADSNode = None
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(Function, node, server.FunctionType, server)
     
     async def init(self, server: Server):
+        """
+        Initializes the function.
+        
+        Args:
+            server: Server - The server.
+        """
+
         await super().init(server)
         node = await self.get_lads_child("IsEnabled")
         self.is_enabled = await BaseVariable.promote(node, server)
@@ -1187,12 +1399,32 @@ class Function(LADSNode):
                 nodes = nodes + variables
         return nodes
 
+# MARK: FunctionSet
 class FunctionSet(LADSSet):
+    """
+    Represents a function set in the LADS OPC UA model.
+
+    Attributes:
+        functions: list[Function] - List of functions.
+        all_variables: list[BaseVariable] - List of all variables.
+    
+    Methods:
+        promote: Promotes a node to a function set.
+        promote_child: Promotes a child node to a function.
+    """
+
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(FunctionSet, node, server.FunctionSetType, server)
     
     async def init(self, server: Server):
+        """
+        Initializes the function set.
+
+        Args:
+            server: Server - The server.
+        """
+
         await super().init(server)
         self.functions: list[Function] = await asyncio.gather(*(self.promote_child(child) for child in self.children))
         self.functions.sort(key = lambda function: function.display_name)
@@ -1244,6 +1476,7 @@ class FunctionSet(LADSSet):
             variables = variables + function.all_variables
         return variables
 
+# MARK: ProgramTemplate
 class ProgramTemplate(LADSNode):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1258,6 +1491,7 @@ class ProgramTemplate(LADSNode):
     def variables(self) ->list[BaseVariable]:
         return self._variables
 
+# MARK: VariableSet
 class VariableSet(LADSSet):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1285,6 +1519,7 @@ class VariableSet(LADSSet):
     def variables(self) -> list[BaseVariable]:
         return self._variables
 
+# MARK: Result
 class Result(LADSNode):
     variable_set: VariableSet
     @classmethod
@@ -1308,6 +1543,7 @@ class Result(LADSNode):
     def variables(self) ->list[BaseVariable]:
         return self._variables
 
+# MARK: ActiveProgram
 class ActiveProgram(LADSNode):
     current_program_template: BaseVariable
     current_runtime: BaseVariable
@@ -1376,6 +1612,7 @@ class ActiveProgram(LADSNode):
         except:
             return 0.0
 
+# MARK: ProgramManager
 class ProgramManager(LADSNode):
     program_template_set: LADSSet
     result_set: LADSSet
@@ -1408,8 +1645,25 @@ class ProgramManager(LADSNode):
     @property
     def results(self) -> list[Result]:
         return self.result_set.children
-    
+
+# MARK: FunctionalUnit
 class FunctionalUnit(LADSNode):
+    """
+    Represents a functional unit of a device.
+    
+    A functional unit can be a sensor, a control function, a state machine, etc.
+
+    Attributes:
+        functional_unit_state (FunctionalStateMachine): The state machine of the functional unit.
+        function_set (FunctionSet): The set of functions of the functional unit.
+        program_manager (ProgramManager): The program manager of the functional unit.
+        unique_name (str): The unique name of the functional unit.
+        at_name (str): The at name of the functional unit.
+        current_state (StateVariable): The current state of the functional unit.
+        functions (list[Function]): The functions of the functional unit.
+        events (list[Event]): The events of the functional unit.
+    """
+
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(FunctionalUnit, node, server.FunctionalUnitType, server)
@@ -1419,6 +1673,13 @@ class FunctionalUnit(LADSNode):
     program_manager: ProgramManager
 
     async def init(self, server: Server):
+        """
+        Initializes the functional unit.
+
+        Args:
+            server: Server - The server.
+        """
+
         await super().init(server)
         self.function_set, self.functional_unit_state, self.program_manager = await asyncio.gather(
             FunctionSet.promote(await self.get_lads_child("FunctionSet"), server),
@@ -1486,6 +1747,7 @@ class FunctionalUnit(LADSNode):
         else:
             return []
 
+# MARK: BaseStateMachineFunction
 class BaseStateMachineFunction(Function):
     def __str__(self):
         return f"{super().__str__()}\n  {self.current_state}"
@@ -1501,7 +1763,8 @@ class BaseStateMachineFunction(Function):
     @property
     def state_machine(self) -> StateMachine:
         _logger.error(f"Abstract function state_machine()")
-    
+
+# MARK: BaseControlFunction
 class BaseControlFunction(BaseStateMachineFunction):
     control_function_state: FunctionalStateMachine = None
 
@@ -1513,11 +1776,13 @@ class BaseControlFunction(BaseStateMachineFunction):
     def state_machine(self) -> StateMachine:
         return self.control_function_state
 
+# MARK: StartStopControlFunction
 class StartStopControlFunction(BaseControlFunction):#
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(StartStopControlFunction, node, server.StartStopControlFunctionType, server)
-    
+
+# MARK: BaseSensorFunction
 class BaseSensorFunction(Function):
     sensor_value = None
 
@@ -1527,7 +1792,8 @@ class BaseSensorFunction(Function):
     @property
     def variables(self) ->list[BaseVariable]:
         return super().variables + [self.sensor_value]
-    
+
+# MARK: AnalogScalarSensorFunction
 class AnalogScalarSensorFunction(BaseSensorFunction):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1537,6 +1803,7 @@ class AnalogScalarSensorFunction(BaseSensorFunction):
         await super().init(server)        
         self.sensor_value = await get_lads_analog_item(self, "SensorValue")
 
+# MARK: AnalogScalarSensorFunctionWithCompensation
 class AnalogScalarSensorFunctionWithCompensation(AnalogScalarSensorFunction):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1555,6 +1822,7 @@ class AnalogArraySensorFunction(AnalogScalarSensorFunction):
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(AnalogArraySensorFunction, node, server.AnalogArraySensorFunctionType, server)
 
+# MARK: TwoStateDiscreteSensorFunction
 class TwoStateDiscreteSensorFunction(BaseSensorFunction):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1564,6 +1832,7 @@ class TwoStateDiscreteSensorFunction(BaseSensorFunction):
         await super().init(server)        
         self.sensor_value = await get_lads_two_state_discrete(self, "SensorValue")
 
+# MARK: MultiStateDiscreteSensorFunction
 class MultiStateDiscreteSensorFunction(BaseSensorFunction):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1573,6 +1842,7 @@ class MultiStateDiscreteSensorFunction(BaseSensorFunction):
         await super().init(server)        
         self.sensor_value = await get_lads_multi_state_discrete(self, "SensorValue")
 
+# MARK: BaseAnalogDiscreteControlFunction
 class BaseAnalogDiscreteControlFunction(BaseControlFunction):
     def __str__(self):
         return f"{super().__str__()}\n  {self.current_value}\n  {self.target_value}"
@@ -1581,6 +1851,7 @@ class BaseAnalogDiscreteControlFunction(BaseControlFunction):
     def variables(self) ->list[BaseVariable]:
         return super().variables + remove_none([self.current_value, self.target_value])
     
+# MARK: AnalogControlFunction
 class AnalogControlFunction(BaseAnalogDiscreteControlFunction):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1591,6 +1862,7 @@ class AnalogControlFunction(BaseAnalogDiscreteControlFunction):
         self.current_value = await get_lads_analog_item(self, "CurrentValue")
         self.target_value = await get_lads_analog_item(self, "TargetValue")
 
+# MARK: AnalogControlFunctionWithTotalizer
 class AnalogControlFunctionWithTotalizer(AnalogControlFunction):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1607,6 +1879,7 @@ class AnalogControlFunctionWithTotalizer(AnalogControlFunction):
     def variables(self) ->list[BaseVariable]:
         return super().variables + [self.totalized_value]
 
+# MARK: TimerControlFunction
 class TimerControlFunction(AnalogControlFunction):
     def __str__(self):
         return f"{super().__str__()}\n  {self.difference_value}"
@@ -1623,10 +1896,12 @@ class TimerControlFunction(AnalogControlFunction):
     def variables(self) ->list[BaseVariable]:
         return super().variables + remove_none([self.difference_value])
     
+# MARK: DiscreteControlFunction
 class DiscreteControlFunction(BaseAnalogDiscreteControlFunction):
     target_value: DiscreteVariable
     current_value: DiscreteVariable
 
+# MARK: TwoStateDiscreteControlFunction
 class TwoStateDiscreteControlFunction(DiscreteControlFunction):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1637,6 +1912,7 @@ class TwoStateDiscreteControlFunction(DiscreteControlFunction):
         self.current_value = await get_lads_two_state_discrete(self, "CurrentValue")
         self.target_value = await get_lads_two_state_discrete(self, "TargetValue")
 
+# MARK: MultiStateDiscreteControlFunction
 class MultiStateDiscreteControlFunction(DiscreteControlFunction):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1647,6 +1923,7 @@ class MultiStateDiscreteControlFunction(DiscreteControlFunction):
         self.current_value = await get_lads_multi_state_discrete(self, "CurrentValue")
         self.target_value = await get_lads_multi_state_discrete(self, "TargetValue")
 
+# MARK: MulitModeControlFunction
 class ControllerParameter(LADSNode):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1706,6 +1983,7 @@ class MulitModeControlFunction(BaseControlFunction):
             variables.append(controller_parameter.current_value)
         return super().variables + variables
     
+# MARK: CoverFunction
 class CoverFunction(BaseStateMachineFunction):
     cover_state: StateMachine = None
 
@@ -1721,6 +1999,7 @@ class CoverFunction(BaseStateMachineFunction):
     def state_machine(self) -> StateMachine:
         return self.cover_state
 
+#MARK: Promotion of generic OPC UA nodes to specfic LADS objects
 async def promote_to(cls: Type, node: Node, super_type_node: Node, server: Server) -> LADSNode:
     if node is None: return None
     node_class = await node.read_node_class()
@@ -1815,10 +2094,36 @@ def get_value(data: dict, key: str) -> any:
     else:
         return None
 
+# MARK: Connections
 class Connections:
+    """
+    Connections class for managing multiple LADS OPC UA client-server connections.
+
+    Attributes:
+        connections (list[Connection]): The list of connections.
+        urls (list[str]): The list of URLs of the connections.
+        initialized (bool): Checks if all servers are initialized.
+        functional_units (list[FunctionalUnit]): The list of functional units from all connections.
+    
+    Methods:
+        add(url, user, password):
+            Adds a new connection with the given parameters.
+        connect():
+            Starts all connection threads (non-asynchronous).
+        disconnect():
+            Disconnects from all server connections (non-asynchronous).
+    """
+
     connections: list[Connection] = []
 
-    def __init__(self, config_file = "src/config.json") -> None:
+    def __init__(self, config_file = "config.json") -> None:
+        """
+        Initializes the connections with the given configuration file.
+
+        Args:
+            config_file (str): The path to the configuration file. Defaults to "config.json".
+        """
+
         try:
             with open(config_file) as f:
                 print(f"parsing config file {config_file}")
@@ -1835,6 +2140,15 @@ class Connections:
             _logger.error(f"Invalid config file {config_file}: {error}")
 
     def add(self, url: str, user: str = None, password: str = None) -> Connection:
+        """
+        Adds a new connection with the given parameters.
+
+        Args:
+            url (str): The URL of the OPC UA server.
+            user (str, optional): The username for authentication. Defaults to None.
+            password (str, optional): The password for authentication. Defaults to None.
+        """
+
         connection = Connection(url, user, password)
         self.connections.append(connection)
         return connection
@@ -1845,6 +2159,8 @@ class Connections:
 
     @property
     def initialized(self) -> bool:
+        if len(self.connections) == 0:
+            return False
         result = True
         for connection in self.connections:
             result = result and connection.initialized
