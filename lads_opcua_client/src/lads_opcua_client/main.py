@@ -16,7 +16,7 @@
     - Connection: Represents a connection to a LADS OPC UA server.
     - Connections: Represents a set of connections to LADS OPC UA servers.
 
-    Copyright (c) 2023 Dr. Matthias Arnold, AixEngineers, Aachen, Germany.
+    Copyright (c) 2023 - 2025 Dr. Matthias Arnold, AixEngineers, Aachen, Germany.
     
     This source code is licensed under the MIT license found in the
     LICENSE file in the root directory of this source tree.
@@ -254,7 +254,8 @@ class Server(LADSTypes):
             item = self.call_async_queue.get()
             if item is not None:
                 try:
-                    await item
+                    result = await item
+                    _logger.debug(f"Evaluated item {item} with result {result}")
                 except Exception as error:
                     _logger.debug(error)
         await asyncio.sleep(0.01)
@@ -560,6 +561,7 @@ class LADSNode(Node):
     
     async def call_lads_method(self, name: str, *args: Any) -> ua.StatusCode:
         try:
+            _logger.debug(f"Call method {name} with args {args}")
             return await self.call_method(ua.QualifiedName(name, self.server.ns_LADS), *args)
         except Exception as error:
             _logger.error(error)
@@ -919,12 +921,11 @@ class FunctionalStateMachine(StateMachine):
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(FunctionalStateMachine, node, server.FiniteStateMachineType, server)
     
-    def start_program(self, program_template: str, properties: pd.DataFrame, supervisory_job_id: str, supervisory_task_id: str, samples: pd.DataFrame):
+    def buildProperties(self, properties: pd.DataFrame) -> list:
         key_value_list = None
         for index, row in properties.iterrows():
             key = str(row["Key"])
             value =str(row["Value"])
-            # value =ua.Variant(Value=str(row["Value"]),VariantType=ua.VariantType.String)
             key_value = self.server.KeyValueType(
                 key,
                 value,
@@ -932,6 +933,10 @@ class FunctionalStateMachine(StateMachine):
             if key_value_list is None:
                 key_value_list = []
             key_value_list.append(key_value)
+        return key_value_list
+
+    def start_program(self, program_template: str, properties: pd.DataFrame, supervisory_job_id: str, supervisory_task_id: str, samples: pd.DataFrame):
+        key_value_list = self.buildProperties(properties)
         sample_info_list = None
         for index, row in samples.iterrows():
             sample_info = self.server.SampleInfoType(
@@ -950,10 +955,11 @@ class FunctionalStateMachine(StateMachine):
                                               supervisory_task_id, 
                                               sample_info_list))
             
-    def start(self):
-        self.call_async(self.call_lads_method("Start"))
+    def start(self, properties: pd.DataFrame):
+        key_value_list = self.buildProperties(properties)
+        self.call_async(self.call_lads_method("Start", key_value_list))
 
-    async def stop(self)-> ua.StatusCode:
+    def stop(self):
         self.call_async(self.call_lads_method("Stop"))
 
 # MARK: LADSSet
@@ -1721,7 +1727,10 @@ class AnalogScalarSensorFunctionWithCompensation(AnalogScalarSensorFunction):
         await super().init(server)        
         self.compensation_value = await get_lads_analog_item(self, "CompensationValue")
 
-# MARK: AnalogArraySensorFunction
+    @property
+    def variables(self) ->list[BaseVariable]:
+        return super().variables + [self.compensation_value]
+
 class AnalogArraySensorFunction(AnalogScalarSensorFunction):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
