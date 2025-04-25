@@ -1,2 +1,2 @@
 from .main import *
-from .lads_afo import *
+from .afo import DictionaryEntry, get_entry

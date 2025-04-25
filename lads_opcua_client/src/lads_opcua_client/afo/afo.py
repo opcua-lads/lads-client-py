@@ -1,7 +1,7 @@
 import os
 import csv
 from typing import Dict, Optional, List
-import importlib.resources
+from importlib.resources import files
 
 class DictionaryEntry:
     def __init__(self, termIRI: str, prefLabel: str, altLabels: str = "",
@@ -88,29 +88,26 @@ def load_dictionary_csv(file_path: str) -> Dict[str, DictionaryEntry]:
     return entries
 
 
-# ----- Module Initialization -----
-# Determine the CSV file path assuming the following structure:
-# project_root/
-#   data/AFO_Dictionary-2025_03.csv
-#   src/lads_afo.py
-#_csv_file_path = os.path.join(os.path.dirname(__file__), '../..', 'data', 'AFO_Dictionary-2025_03.csv')
+# MARK: Module Initialization
 try:
-    with importlib.resources.path('lads_opcua_client.data', 'AFO_Dictionary-2025_03.csv') as csv_path:
-        _csv_file_path = str(csv_path)
-        print(f"CSV file path: {_csv_file_path}")
+    csv_path = files('lads_opcua_client.afo').joinpath('AFO_Dictionary-2025_03.csv')
+    _csv_file_path = str(csv_path)
 except Exception as e:
     print(f"Error locating dictionary CSV: {e}")
     _csv_file_path = None
 
 try:
-    _DICTIONARY_ENTRIES: Dict[str, DictionaryEntry] = load_dictionary_csv(_csv_file_path)
-    print(f"Loaded {_DICTIONARY_ENTRIES.__len__()} dictionary entries from CSV.")
+    if _csv_file_path is not None and os.path.exists(_csv_file_path):
+        _DICTIONARY_ENTRIES: Dict[str, DictionaryEntry] = load_dictionary_csv(_csv_file_path)
+        print(f"Loaded {_DICTIONARY_ENTRIES.__len__()} dictionary entries from CSV.")
+    else:
+        print(f"CSV file not found at path: {_csv_file_path}")
+        _DICTIONARY_ENTRIES = {}
 except Exception as e:
     print(f"Error loading dictionary CSV: {e}")
     _DICTIONARY_ENTRIES = {}
 
-
-# ----- Public API Functions -----
+# MARK: Public API Functions
 def get_entry(termIRI: str) -> Optional[DictionaryEntry]:
     """
     Returns the DictionaryEntry for the given termIRI.
@@ -123,4 +120,3 @@ def get_all_entries() -> List[DictionaryEntry]:
     Returns a list of all DictionaryEntry instances.
     """
     return list(_DICTIONARY_ENTRIES.values())
-

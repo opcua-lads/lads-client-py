@@ -1,7 +1,9 @@
-src/*.pyc
+*.pyc
+.pytest_cache
 src/__pycache__/*
 .venv
 .vscode
 .dev
 config.json
 */dist/
+tests/__pycache__
