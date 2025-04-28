@@ -650,7 +650,10 @@ def update_result_set(container, functional_unit: lads.FunctionalUnit):
                     st.markdown(":gray[Definitions]", help=result.dictionary_entries_as_markdown)
                 show_variables_table(result.variables)
                 if len(result.variable_set.variables) > 0:
-                    st.write("Result data")
+                    entries = list()
+                    for variable in result.variable_set.variables:
+                        entries.append(variable.dictionary_entries_as_markdown)
+                    st.markdown("Result data", help="\n\r".join(entries))
                     show_variables_table(result.variable_set.variables)
 
 selectedFunctionalUnitKey = "selected_functional_unit"
@@ -710,10 +713,10 @@ def main():
             selected_functional_unit = functional_unit
 
     # title
-    st.subheader("LADS OPC UA Client")
+    st.subheader("LADS OPC UA Client", help=selected_functional_unit.device.dictionary_entries_as_markdown)
     
     with st.expander(f"**{selected_functional_unit.at_name}**", expanded=True):
-        col_cmd, col_state = st.columns([2, 3])
+        col_cmd, col_state, col_definition = st.columns([2, 3, 2])
         with col_cmd:
             state_machine = selected_functional_unit.functional_unit_state
             methods = list(filter(lambda method: method != "StartProgram", state_machine.method_names ))
@@ -722,9 +725,12 @@ def main():
                 state_machine.start(pd.DataFrame())
             else:
                 state_machine.call_method_by_name(cmd)
-
         with col_state:
             container_state = show_state(col_state, selected_functional_unit)
+        with col_definition:
+            definition = selected_functional_unit.dictionary_entries_as_markdown
+            if len(definition) > 0:
+                st.markdown(":gray[Definitions]", help = definition)
 
     tab_functions, tab_program_manager, tab_device = st.tabs(["Operation", "Program Management", "Asset Management"])
     container_functional_unit = st.empty()
