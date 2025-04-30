@@ -11,14 +11,14 @@ echo "Uninstalling any existing non-editable lads_opcua_client package (if prese
 pip uninstall -y lads_opcua_client || true   # ignore error if not installed
 
 echo "Installing lads_opcua_client in editable mode…"
-cd "$ROOT_DIR/lads_opcua_client"
+cd "$ROOT_DIR/../lads_opcua_client"
 pip install -e .
 
 echo "Uninstalling any existing non-editable lads_opcua_viewer package (if present)…"
 pip uninstall -y lads_opcua_viewer || true
 
 echo "Installing lads_opcua_viewer in editable mode…"
-cd "$ROOT_DIR/lads_opcua_viewer"
+cd "$ROOT_DIR/../lads_opcua_viewer"
 pip install -e .
 
 echo "Installation complete. Both packages are now installed in editable mode."
