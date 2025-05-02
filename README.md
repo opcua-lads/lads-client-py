@@ -38,7 +38,7 @@ The [build](https://pypi.org/project/python-build/) library is required to build
 ```bash
 pip install build
 ```
-Within the /dev folder you will find poeershell und bash scripts which help to automate the steps which are outlined in the following.
+Within the /dev folder you will find powershell und bash scripts which help to automate the steps which are outlined in the following.
 
 ## Client Library
 The *[lads_opcua_client](https://github.com/opcua-lads/lads-client-py/tree/main/lads_opcua_client)* library can be build and installed with the following command for Windows users:
