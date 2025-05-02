@@ -650,9 +650,14 @@ def update_result_set(container, functional_unit: lads.FunctionalUnit):
                     st.markdown(":gray[Definitions]", help=result.dictionary_entries_as_markdown)
                 show_variables_table(result.variables)
                 if len(result.variable_set.variables) > 0:
+                    # collect dictionary entries while avoiding duplicates but preserving order
                     entries = list()
+                    entry_set = set()
                     for variable in result.variable_set.variables:
-                        entries.append(variable.dictionary_entries_as_markdown)
+                        entry = variable.dictionary_entries_as_markdown
+                        if entry not in entry_set:
+                            entries.append(entry)
+                            entry_set.add(entry)
                     st.markdown("Result data", help="\n\r".join(entries))
                     show_variables_table(result.variable_set.variables)
 
