@@ -1,4 +1,4 @@
-# lads-client-py
+# LADS-CLIENT-PY
 Pythonic client and viewer LADS OPC UA libraries.
 
 # Installing
