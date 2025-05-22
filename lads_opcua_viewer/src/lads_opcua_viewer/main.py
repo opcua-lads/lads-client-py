@@ -648,7 +648,24 @@ def update_result_set(container, functional_unit: lads.FunctionalUnit):
                 definitions = result.dictionary_entries_as_markdown
                 if len(definitions) > 0:
                     st.markdown(":gray[Definitions]", help=result.dictionary_entries_as_markdown)
+
+                # show result type specific variables
                 show_variables_table(result.variables)
+
+                # show result files, if any
+                for result_file in result.result_files:
+                    st.markdown(f"Result file {result_file.display_name}", help=result_file.dictionary_entries_as_markdown)
+                    show_variables_table(result_file.variables)
+                    unique_key = f"button_{time.time_ns()}"
+                    if result_file.has_data():
+                        file_name = result_file.name.value_str
+                        mime_type = result_file.mime_type.value_str
+                        data = result_file.data
+                        st.download_button("Download", data=data, file_name=file_name, mime=mime_type, key=unique_key)
+                    else:
+                        st.button("Fetch data", key=unique_key, on_click=result_file.fetch_data())
+                
+                # show application specific variables, if any
                 if len(result.variable_set.variables) > 0:
                     # collect dictionary entries while avoiding duplicates but preserving order
                     entries = list()
