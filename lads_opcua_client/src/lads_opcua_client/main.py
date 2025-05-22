@@ -86,6 +86,8 @@ class LADSObjectIds(IntEnum):
     ActiveProgramType = 1040
     ResultSetType = 1020
     ResultType = 1021
+    ResultFileSetType = 1022
+    ResultFileType = 1001
     VariableSetType = 1041
 
 class MachineryObjectIds(IntEnum):
@@ -160,6 +162,8 @@ class LADSTypes:
         self.ActiveProgramType = self.get_lads_node(LADSObjectIds.ActiveProgramType)
         self.ResultSetType = self.get_lads_node(LADSObjectIds.ResultSetType)
         self.ResultType = self.get_lads_node(LADSObjectIds.ResultType)
+        self.ResultFileSetType = self.get_lads_node(LADSObjectIds.ResultFileSetType)
+        self.ResultFileType = self.get_lads_node(LADSObjectIds.ResultFileType)
         self.VariableSetType = self.get_lads_node(LADSObjectIds.VariableSetType)
 
         # read data tyoes only once - asyncua design problem..
@@ -1521,8 +1525,48 @@ class VariableSet(LADSSet):
     def variables(self) -> list[BaseVariable]:
         return self._variables
 
+# MARK: ResutFile
+from asyncua.client.ua_file import UaFile
+class ResultFile(LADSNode):
+    mime_type: BaseVariable
+    name: BaseVariable
+    file: LADSNode
+    data: Any
+
+    @classmethod
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(ResultFile, node, server.ResultFileType, server)
+    
+    async def init(self, server: Server):
+        await super().init(server)
+        self.mime_type = await self.get_lads_variable("MimeType")
+        self.name = await self.get_lads_variable("Name")
+        self.file = await self.get_lads_child("File")
+        self.data = None
+
+    async def download(self):
+        try:
+            _logger.debug("start downloading file data ..")
+            async with UaFile(self.file, "r") as ua_file:
+                self.data = await ua_file.read()
+                _logger.debug("finished downloading file data ..")
+        except:
+            _logger.error("Failed reading file")
+        
+    def has_data(self) -> bool:
+        return self.data is not None
+
+    def fetch_data(self):
+        _logger.debug("fetching file data ..")
+        self.call_async(self.download())
+
+    @property
+    def variables(self) ->list[BaseVariable]:
+        return [self.name, self.mime_type]
+
 # MARK: Result
 class Result(LADSNode):
+    file_set: LADSSet
     variable_set: VariableSet
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1532,6 +1576,8 @@ class Result(LADSNode):
         await super().init(server)
         self._variables = await get_properties_and_variables(self)
         self._variables.sort(key = lambda variable: variable.display_name)
+        self.file_set = await LADSSet.promote(await self.get_lads_child("FileSet"), server)
+        await self.file_set.promote_children(ResultFile, server.ResultFileType, server.ResultFileSetType)
         self.variable_set = await VariableSet.promote(await self.get_lads_child("VariableSet"), self.server)
 
     def update(self):
@@ -1542,9 +1588,13 @@ class Result(LADSNode):
         self.variable_set = await VariableSet.promote(await self.get_lads_child("VariableSet"), self.server)
 
     @property
-    def variables(self) ->list[BaseVariable]:
+    def variables(self) -> list[BaseVariable]:
         return self._variables
 
+    @property
+    def result_files(self) -> list[ResultFile]:
+        return self.file_set.children
+    
 # MARK: ActiveProgram
 class ActiveProgram(LADSNode):
     current_program_template: BaseVariable
