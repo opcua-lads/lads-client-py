@@ -1505,6 +1505,9 @@ class VariableSet(LADSSet):
     
     async def init(self, server: Server):
         await super().init(server)
+        await self.update_children()
+
+    async def update_children(self):
         self._variables: list[BaseVariable] = []
         await self.collect_variables(self)
 
@@ -1525,7 +1528,7 @@ class VariableSet(LADSSet):
     def variables(self) -> list[BaseVariable]:
         return self._variables
 
-# MARK: ResutFile
+# MARK: ResultFile
 from asyncua.client.ua_file import UaFile
 class ResultFile(LADSNode):
     mime_type: BaseVariable
@@ -1568,6 +1571,8 @@ class ResultFile(LADSNode):
 class Result(LADSNode):
     file_set: LADSSet
     variable_set: VariableSet
+    subscription_handler: SubscriptionHandler
+
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(Result, node, server.ResultType, server)
@@ -1576,15 +1581,21 @@ class Result(LADSNode):
         await super().init(server)
         self._variables = await get_properties_and_variables(self)
         self._variables.sort(key = lambda variable: variable.display_name)
-        self.file_set = await LADSSet.promote(await self.get_lads_child("FileSet"), server)
-        await self.file_set.promote_children(ResultFile, server.ResultFileType, server.ResultFileSetType)
-        self.variable_set = await VariableSet.promote(await self.get_lads_child("VariableSet"), self.server)
+        await self.update_sets()
+        self.subscription_handler = SubscriptionHandler()
+        node_version_vars = [self.file_set.node_version, self.variable_set.node_version]
+        data_change_handlers = await self.subscription_handler.subscribe_data_change(self.server, [self.file_set.node_version, self.variable_set.node_version])        
 
     def update(self):
         self.call_async(self.update_async())
 
     async def update_async(self):
         await self.update_variables_async()
+        await self.update_sets()
+
+    async def update_sets(self):        
+        self.file_set = await LADSSet.promote(await self.get_lads_child("FileSet"), self.server)
+        await self.file_set.promote_children(ResultFile, self.server.ResultFileType, self.server.ResultFileSetType)
         self.variable_set = await VariableSet.promote(await self.get_lads_child("VariableSet"), self.server)
 
     @property

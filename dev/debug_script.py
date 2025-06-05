@@ -3,7 +3,7 @@ import time
 
 def main():
     #conn = lads.Connection (url = "opc.tcp://IUTALADSOPC:26543")
-    json_file = "C:/Users/apoli/Documents/github/lads-client-py/.dev/config.json"
+    json_file = "config.json"
 
     try:
         with open(json_file) as file:

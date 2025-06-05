@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lads_opcua_viewer"
-version = "0.0.2"
+version = "0.0.1"
 dependencies = [
   "lads_opcua_client>=0.0.1",
   "streamlit>=1.43.2",

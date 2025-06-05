@@ -205,7 +205,7 @@ def update_functions(function_containers: dict):
             with sp_col:
                 st.markdown(f":{color}[**{function.target_value.value_str}**]", help=function.target_value.dictionary_entries_as_markdown)
             with pv_col: 
-                st.markdown(f":{variable_status_color(function.current_value)}[**{function.current_value.value_str}**]", help=function.current_state.dictionary_entries_as_markdown)
+                st.markdown(f":{variable_status_color(function.current_value)}[**{function.current_value.value_str}**]", help=function.current_value.dictionary_entries_as_markdown)
         elif isinstance(function, lads.AnalogScalarSensorFunction):
             if isinstance(function, lads.AnalogScalarSensorFunctionWithCompensation):
                 if function.compensation_value is not None:
@@ -569,7 +569,6 @@ def show_active_program(container, functional_unit: lads.FunctionalUnit) -> any:
     program_manager = functional_unit.program_manager
     if not program_manager is None: 
         form_container = empty(st.empty())
-        # print("creating form")
         with st.form("Start Program"):
             template_id = st.selectbox("Program template", program_manager.program_template_names)
             with st.expander("Properties", expanded=False):
@@ -587,9 +586,8 @@ def show_active_program(container, functional_unit: lads.FunctionalUnit) -> any:
                                                             "CustomData": st.column_config.TextColumn(),
                                                             },
                                             num_rows="dynamic", hide_index=True, use_container_width=True)
-            submitted = st.form_submit_button("Start Program")
-            if submitted:
-                functional_unit.functional_unit_state.start_program(template_id, key_value_df, job_id, task_id, samples_df)
+            if st.form_submit_button("Start Program", help="**Start's a program run** based on the selected program-template.  \r\nIf you want to manually stop or abort the current run, utilize the functional-unit's commands (drop-down next to the unit's state indicator)."):
+                    functional_unit.functional_unit_state.start_program(template_id, key_value_df, job_id, task_id, samples_df)
 
     progress_container = empty(st.empty())
     update_active_program(progress_container, functional_unit)
@@ -630,7 +628,7 @@ def update_active_program(progress_container, functional_unit: lads.FunctionalUn
                     show_variables_table(active_program.variables)
 
     # update result once run is finished
-    if "Stopped" in current_state and "Running" in previous_state:
+    if False and "Stopped" in current_state and "Running" in previous_state:
         try:
             program_manager.results[-1].update()
         except:
