@@ -14,8 +14,8 @@ import pandas as pd
 import time, math
 import plotly.graph_objects as go
 from typing import Tuple
-import lads_opcua_client as lads
 from asyncua import ua
+import lads_opcua_client as lads
 import atexit
 
 # For disabling the exit of the threadpool executor
@@ -444,6 +444,76 @@ def show_variables_table(variables: list[lads.BaseVariable], has_description: bo
     }
     st.dataframe(data, use_container_width=True, hide_index=True, column_config=column_config)
 
+# MARK: show_documents
+def show_documents_(container, document_set: lads.LADSSet):
+    with container.container():
+        col_buttons, col_details = st.columns([0.25, 0.75])
+        with col_buttons:
+            documents: list[lads.ComplianceDocument] = document_set.children
+            for document in documents:
+                name = document.display_name
+                uniqe_key = f"document_{name}_{time.time_ns()}"
+                st.button(key=uniqe_key,label=name, use_container_width=True, type="tertiary", on_click=show_document_details(col_details, document))
+        if len(documents) > 0:
+            show_document_details(col_details, documents[0])
+    return container
+
+def show_document_details(column, document):
+    if document is None: return
+    empty(column)
+    with column:
+        mime_type: str = document.mime_type.value_str
+        if document.content:
+            content: str = document.content.value_str
+            if mime_type.find("text") >= 0:
+                st.text(content)
+            elif mime_type.find("xml") >= 0:
+                st.text(content)
+            elif mime_type.find("json") >= 0:
+                st.json(content)
+
+def update_documents_(container, document_set: lads.LADSSet):
+    return container
+
+# MARK: show_documents
+def show_documents(container, document_set: lads.LADSSet):
+    return update_documents(container=container, document_set=document_set)
+
+# MARK: update_documents
+def update_documents(container, document_set: lads.LADSSet):
+    with container.container():
+        documents: list[lads.ComplianceDocument] = document_set.children
+        name = []
+        document_name = []
+        mime_type = []
+        issued_at = []
+        content = []
+        schema_uri = []
+        for document in documents:
+            name.append(document.display_name)
+            document_name.append(document.document_name.value_str)
+            issued_at.append(document.issued_at.value_str)
+            content.append(document.content.value_str if document.content is not None else "")
+            mime_type.append(document.mime_type.value_str)
+            schema_uri.append(document.schema_uri.value_str if document.schema_uri is not None else "")
+        data: pd.DataFrame = {"Name": document_name, "Issued At": issued_at, "Content": content, "Mime Type": mime_type, "Schema URI": schema_uri }
+        column_config={
+            "Name": st.column_config.Column(None, help="Document name", disabled=True, ),
+            #"Issued At": st.column_config.DatetimeColumn(None, help="Date of issue", disabled=True, ),
+            "Issued At": st.column_config.Column(None, help="Date of issue", disabled=True, ),
+            "Mime Type": st.column_config.Column(None, help="Document mime-type", disabled=True, ),
+            "Content": st.column_config.Column(None, help="Document content", disabled=True, ),
+            "Schema URI": st.column_config.Column(None, help="Document semantic schema", disabled=True, ),
+        }
+        unique_key = f"documents_{time.time_ns()}"
+        # st.dataframe(data, use_container_width=True, hide_index=True, column_config=column_config, on_select=document_selected, selection_mode="single-row", key=unique_key)
+        st.dataframe(data, use_container_width=True, hide_index=True, column_config=column_config)
+        
+    return container
+
+def document_selected():
+    pass
+
 # MARK: show_asset_management
 def show_asset_management(container, device: lads.Device):
     device_state_machine = device.device_state
@@ -754,7 +824,17 @@ def main():
             if len(definition) > 0:
                 st.markdown(":gray[Definitions]", help = definition)
 
-    tab_functions, tab_program_manager, tab_device = st.tabs(["Operation", "Program Management", "Asset Management"])
+    # eventually create addtional tab for compliance documents
+    document_set: lads.LADSSet = None
+    try:
+        document_set = selected_functional_unit.device.compliance_document_set
+    except(Exception):
+        pass
+    if document_set is not None:
+        tab_functions, tab_program_manager, tab_device, tab_documents = st.tabs(["Operation", "Program Management", "Asset Management", "Compliance Documents"])
+    else:
+        tab_functions, tab_program_manager, tab_device = st.tabs(["Operation", "Program Management", "Asset Management"])
+        tab_documents = None
     container_functional_unit = st.empty()
     empty(container_functional_unit)
     with container_functional_unit:
@@ -781,6 +861,10 @@ def main():
         with tab_device:
             container_device, container_map, container_components = show_asset_management(empty(st.empty()), selected_functional_unit.device)
 
+        if tab_documents is not None:
+            with tab_documents:
+                container_documents = show_documents(empty(st.empty()), document_set)
+
         # Display the events table
         with st.container():
             st.divider()
@@ -797,6 +881,8 @@ def main():
                 update_events(container_events, selected_functional_unit)
                 update_active_program(progress_container, selected_functional_unit)
                 update_asset_management(container_device, container_map, container_components, selected_functional_unit.device)
+                if tab_documents is not None:
+                    update_documents(container_documents, document_set)
                 index += 1
                 if index >= 5:
                     index = 0

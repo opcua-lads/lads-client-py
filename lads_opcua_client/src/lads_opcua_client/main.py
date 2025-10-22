@@ -44,7 +44,7 @@ if AFOSupport:
     from .afo import DictionaryEntry, get_entry
 
 # initialize logger
-level = logging.WARNING
+level = logging.DEBUG
 _logger = logging.getLogger(__name__)
 _logger.setLevel(level)
 console_handler = logging.StreamHandler(sys.stdout)
@@ -102,6 +102,15 @@ class LADSObjectIds(IntEnum):
     ResultFileType = 1001
     VariableSetType = 1041
 
+class LADS_CD_ObjectIds(IntEnum):
+    """LADS Compliance Document specific numerical node-ids"""
+    ComplianceDocumentSetType = 1000
+    ComplianceDocumentType = 1001
+    HasComplianceDocument = 4000
+    HasCalibrationCertificate = 4001
+    HasValidationReport = 4002
+    HasQualificationProtocol = 4003
+
 class MachineryObjectIds(IntEnum):
     """Machinery specific numerical node-ids"""
     MachineryItemIdentificationType = 1004
@@ -132,6 +141,7 @@ class LADSTypes:
         self.ns_AMB = await self.client.get_namespace_index("http://opcfoundation.org/UA/AMB/")
         self.ns_Machinery = await self.client.get_namespace_index("http://opcfoundation.org/UA/Machinery/")
         self.ns_LADS = await self.client.get_namespace_index("http://opcfoundation.org/UA/LADS/")
+        self.ns_LADS_CD = await self.client.get_namespace_index("http://aixengineers.de/LADS-CD/")
 
         # get well known type nodes
         self.BaseObjectType = self.get_node(ua.ObjectIds.BaseObjectType)
@@ -177,6 +187,13 @@ class LADSTypes:
         self.ResultFileSetType = self.get_lads_node(LADSObjectIds.ResultFileSetType)
         self.ResultFileType = self.get_lads_node(LADSObjectIds.ResultFileType)
         self.VariableSetType = self.get_lads_node(LADSObjectIds.VariableSetType)
+        # LADS Compliance Documemts (experimental)
+        self.ComplianceDocumentSetType = self.get_lads_cd_node(LADS_CD_ObjectIds.ComplianceDocumentSetType)
+        self.ComplianceDocumentType = self.get_lads_cd_node(LADS_CD_ObjectIds.ComplianceDocumentType)
+        self.HasComplianceDocument = self.get_lads_cd_node(LADS_CD_ObjectIds.HasComplianceDocument)
+        self.HasCalibrationCertificate = self.get_lads_cd_node(LADS_CD_ObjectIds.HasCalibrationCertificate)
+        self.HasValidationReport = self.get_lads_cd_node(LADS_CD_ObjectIds.HasValidationReport)
+        self.HasQualificationProtocol = self.get_lads_cd_node(LADS_CD_ObjectIds.HasQualificationProtocol)
 
         # read data tyoes only once - asyncua design problem..
         if Connection.data_types is None:
@@ -217,6 +234,9 @@ class LADSTypes:
 
     def get_lads_node(self, id: int) -> Node | None:
         return self.client.get_node(ua.NodeId(int(id), self.ns_LADS))
+
+    def get_lads_cd_node(self, id: int) -> Node | None:
+        return self.client.get_node(ua.NodeId(int(id), self.ns_LADS_CD))
 
 # MARK: Server
 class Server(LADSTypes):
@@ -616,6 +636,12 @@ class LADSNode(Node):
     async def get_lads_variable(self, name : str) -> BaseVariable:
         return await BaseVariable.promote(await self.get_lads_child(name), self.server)
     
+    async def get_lads_cd_child(self, name : str) -> Node:
+        return await self.get_child_or_none(ua.QualifiedName(name, self.server.ns_LADS_CD))
+    
+    async def get_lads_cd_variable(self, name : str) -> BaseVariable:
+        return await BaseVariable.promote(await self.get_lads_cd_child(name), self.server)
+    
     async def get_child_objects(self, parent: Node = None) -> list[Node]:
         if parent is None: parent = self
         # search for HasChild and Organizes references
@@ -847,12 +873,15 @@ class NodeVersionVariable(SubscribedVariable):
     async def init(self, server: Server):
         await super().init(server)
         self.subscription_level = SubscriptionLevel.Permanent
-        self.set: LADSSet = None
+        self.set: LADSNode = None
 
     def data_change_notification(self, data: DataChangeNotif):
         super().data_change_notification(data)
         if self.set is None: return
-        self.set.node_version_changed()
+        try:
+            self.set.node_version_changed()
+        except(Exception):
+            _logger.debug(f"Set {self.set.display_name} misses node_version_changed() implementation")
 
 # MARK: StateVariable
 class StateVariable(SubscribedVariable):
@@ -1136,8 +1165,7 @@ class LADSSet(LADSNode):
             self.node_version = await NodeVersionVariable.promote(node_version, server)
             self.node_version.set = self
         except Exception as error:
-            pass
-            # _logger.warning(error)
+             _logger.warning(error)
         self.children = await self.get_child_objects()
 
     async def promote_children(self, child_class: Type, child_type: Node, set_type: Node):
@@ -1158,6 +1186,7 @@ class LADSSet(LADSNode):
         return [] if self.node_version is None else [self.node_version]
     
     def node_version_changed(self):
+        _logger.debug(f"NodeVersion of {self.display_name} changed.")
         self.call_async(self.update_children())
     
     async def update_children(self):
@@ -1325,6 +1354,7 @@ class Device(Component):
     hierarchical_location: SubscribedVariable = None
     operational_location: SubscribedVariable = None
     state_machine_variables: list[BaseVariable] = []
+    compliance_document_set: LADSSet = None
 
     async def init(self, server: Server):
         await super().init(server)
@@ -1347,6 +1377,15 @@ class Device(Component):
             self.location = self.identification.location
         for location in self.location_variables:
             location.subscription_level = SubscriptionLevel.Temporary
+        
+        # compliance documents
+        self.compliance_document_set = await ComplianceDocumentSet.promote(await self.get_lads_cd_child("ComplianceDocumentSet"), self.server)
+        if self.compliance_document_set is not None:
+            _logger.debug("loading compliance documents")
+            await self.compliance_document_set.promote_children(ComplianceDocument, self.server.ComplianceDocumentType, self.server.ComplianceDocumentSetType)
+        else:
+            _logger.debug("unable to find compliance document set")
+
 
     async def finalize_init(self):
         await super().finalize_init()
@@ -1394,7 +1433,11 @@ class Device(Component):
     
     @property
     def variables(self) ->list[BaseVariable]:
-        return self.name_plate_variables + self.state_machine_variables
+        document_set_node_version = self.compliance_document_set.node_version if self.compliance_document_set is not None else None
+        _logger.debug(document_set_node_version)
+        vars = self.name_plate_variables + self.state_machine_variables
+        vars.append(self.compliance_document_set.node_version if self.compliance_document_set is not None else None)
+        return remove_none(vars)
     
     @property
     def events(self) ->list[Event]:
@@ -1771,6 +1814,63 @@ class ProgramManager(LADSNode):
     @property
     def results(self) -> list[Result]:
         return self.result_set.children
+
+# MARK: class ComplianceDocumentSet(LADSSet):
+class ComplianceDocumentSet(LADSSet):
+    # since the Machinery type Components is not derived from LADS.SetType we need a different type check
+    @classmethod
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(ComplianceDocumentSet, node, server.ComplianceDocumentSetType, server)
+
+# MARK: ComplianceDocument
+class ComplianceDocument(LADSNode):
+    document_name: BaseVariable
+    issued_at: BaseVariable
+    valid_from: BaseVariable
+    valid_until: BaseVariable
+    mime_type: BaseVariable
+    schema_uri: BaseVariable
+    content: BaseVariable
+    file: LADSNode
+    data: Any
+    subscription_handler: SubscriptionHandler
+
+    @classmethod
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(Result, node, server.ComplianceDocumentType, server)
+
+    async def init(self, server: Server):
+        await super().init(server)
+        self.document_name = await self.get_lads_cd_variable("DocumentName")
+        self.issued_at = await self.get_lads_cd_variable("IssuedAt")
+        self.valid_from = await self.get_lads_cd_variable("ValidFrom")
+        self.valid_until = await self.get_lads_cd_variable("ValidUntil")
+        self.mime_type = await self.get_lads_cd_variable("MimeType")
+        self.content = await self.get_lads_cd_variable("Content")
+        self.schema_uri = await self.get_lads_cd_variable("SchemaUri")
+        self.file = await self.get_lads_cd_child("File")
+        self.data = None
+
+    async def download(self):
+        try:
+            _logger.debug("start downloading file data ..")
+            async with UaFile(self.file, "r") as ua_file:
+                self.data = await ua_file.read()
+                _logger.debug("finished downloading file data ..")
+        except:
+            _logger.error("Failed reading file")
+        
+    def has_data(self) -> bool:
+        return self.data is not None
+
+    def fetch_data(self):
+        _logger.debug("fetching file data ..")
+        self.call_async(self.download())
+
+    @property
+    def variables(self) ->list[BaseVariable]:
+        return remove_none([self.document_name, self.issued_at, self.valid_from, self.valid_until, self.mime_type, self.content])
+
 
 # MARK: FunctionalUnit
 class FunctionalUnit(LADSNode):

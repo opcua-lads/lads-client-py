@@ -8,17 +8,17 @@ set -euo pipefail       # stop on first error, prevent unset vars, trace pipe er
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "Uninstalling any existing non-editable lads_opcua_client package (if present)…"
-pip uninstall -y lads_opcua_client || true   # ignore error if not installed
+pip3 uninstall -y lads_opcua_client || true   # ignore error if not installed
 
 echo "Installing lads_opcua_client in editable mode…"
 cd "$ROOT_DIR/../lads_opcua_client"
-pip install -e .
+pip3 install -e .
 
 echo "Uninstalling any existing non-editable lads_opcua_viewer package (if present)…"
-pip uninstall -y lads_opcua_viewer || true
+pip3 uninstall -y lads_opcua_viewer || true
 
 echo "Installing lads_opcua_viewer in editable mode…"
 cd "$ROOT_DIR/../lads_opcua_viewer"
-pip install -e .
+pip3 install -e .
 
 echo "Installation complete. Both packages are now installed in editable mode."
