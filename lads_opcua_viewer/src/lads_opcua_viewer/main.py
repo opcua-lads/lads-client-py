@@ -445,74 +445,79 @@ def show_variables_table(variables: list[lads.BaseVariable], has_description: bo
     st.dataframe(data, use_container_width=True, hide_index=True, column_config=column_config)
 
 # MARK: show_documents
-def show_documents_(container, document_set: lads.LADSSet):
-    with container.container():
-        col_buttons, col_details = st.columns([0.25, 0.75])
-        with col_buttons:
-            documents: list[lads.ComplianceDocument] = document_set.children
-            for document in documents:
-                name = document.display_name
-                uniqe_key = f"document_{name}_{time.time_ns()}"
-                st.button(key=uniqe_key,label=name, use_container_width=True, type="tertiary", on_click=show_document_details(col_details, document))
-        if len(documents) > 0:
-            show_document_details(col_details, documents[0])
-    return container
-
-def show_document_details(column, document):
-    if document is None: return
-    empty(column)
-    with column:
-        mime_type: str = document.mime_type.value_str
-        if document.content:
-            content: str = document.content.value_str
-            if mime_type.find("text") >= 0:
-                st.text(content)
-            elif mime_type.find("xml") >= 0:
-                st.text(content)
-            elif mime_type.find("json") >= 0:
-                st.json(content)
-
-def update_documents_(container, document_set: lads.LADSSet):
-    return container
-
-# MARK: show_documents
 def show_documents(container, document_set: lads.LADSSet):
-    return update_documents(container=container, document_set=document_set)
-
-# MARK: update_documents
-def update_documents(container, document_set: lads.LADSSet):
     with container.container():
-        documents: list[lads.ComplianceDocument] = document_set.children
-        name = []
-        document_name = []
-        mime_type = []
-        issued_at = []
-        content = []
-        schema_uri = []
-        for document in documents:
-            name.append(document.display_name)
-            document_name.append(document.document_name.value_str)
-            issued_at.append(document.issued_at.value_str)
-            content.append(document.content.value_str if document.content is not None else "")
-            mime_type.append(document.mime_type.value_str)
-            schema_uri.append(document.schema_uri.value_str if document.schema_uri is not None else "")
-        data: pd.DataFrame = {"Name": document_name, "Issued At": issued_at, "Content": content, "Mime Type": mime_type, "Schema URI": schema_uri }
-        column_config={
-            "Name": st.column_config.Column(None, help="Document name", disabled=True, ),
-            #"Issued At": st.column_config.DatetimeColumn(None, help="Date of issue", disabled=True, ),
-            "Issued At": st.column_config.Column(None, help="Date of issue", disabled=True, ),
-            "Mime Type": st.column_config.Column(None, help="Document mime-type", disabled=True, ),
-            "Content": st.column_config.Column(None, help="Document content", disabled=True, ),
-            "Schema URI": st.column_config.Column(None, help="Document semantic schema", disabled=True, ),
-        }
-        unique_key = f"documents_{time.time_ns()}"
-        # st.dataframe(data, use_container_width=True, hide_index=True, column_config=column_config, on_select=document_selected, selection_mode="single-row", key=unique_key)
-        st.dataframe(data, use_container_width=True, hide_index=True, column_config=column_config)
-        
-    return container
+        container_documents, container_document_detail = st.columns([0.25, 0.75])
+    render_documents(container_documents, container_document_detail, document_set)
+    return container_documents, container_document_detail
 
-def document_selected():
+def update_documents(container_documents, container_document_detail, document_set: lads.LADSSet):
     pass
+
+def render_documents(container_documents, container_document_detail, document_set: lads.LADSSet):
+    
+    def append(list: list[str], item: lads.BaseVariable, default = ""):
+        list.append(item.value_str if item is not None else default)
+
+    # prepare data
+    documents: list[lads.ComplianceDocument] = document_set.children
+    name = []
+    document_name = []
+    issued_at = []
+    valid_from = []
+    valid_until = []
+    mime_type = []
+    content = []
+    schema_uri = []
+    for document in documents:
+        name.append(document.display_name)
+        append(document_name, document.document_name)
+        append(issued_at, document.issued_at)
+        append(valid_from, document.valid_from)
+        append(valid_until, document.valid_until)
+        append(mime_type, document.mime_type)
+        append(content, document.content)
+        append(schema_uri, document.schema_uri)
+    data = pd.DataFrame({"Name": document_name, "Issued At": issued_at, 
+                         "Valid From": valid_from, "Valid Until": valid_until, 
+                         "Content": content, "Mime Type": mime_type, "Schema URI": schema_uri })
+    # build view
+    with container_documents:
+        st.markdown("**Overview**")
+        unique_key = f"select_document"
+        selected_name = st.radio("Select a document", options=data["Name"], key=unique_key, index=0)
+    with container_document_detail:
+        st.markdown("**Details**")
+        if selected_name is None:
+            st.write("Select a document")
+        else:
+            selected = data[data["Name"] == selected_name].iloc[0]
+            d = data[data["Name"] == selected_name]
+            index = d.index.to_list()[0]
+            st.write(f"Index {index}")
+            unique_key = f"document_table_{time.time_ns()}"
+            st.dataframe(d, column_order=["Name", "Issued At", "Valid From", "Valid Until", "Mime Type", "Schema URI"], hide_index=True, key=unique_key)
+            mime_type: str = selected["Mime Type"]
+            content: str = selected["Content"]
+            if content is not None:
+                if mime_type.find("text") >= 0:
+                    st.text(content)
+                elif mime_type.find("json") >= 0:
+                    st.json(content)
+                elif mime_type.find("xml") >= 0:
+                    st.code(content, language="xml")
+            if mime_type.find("pdf") >= 0:
+                try:
+                    document = documents[index]
+                    if not document.has_data():
+                        document.fetch_data()
+                        st.text("Loading PDF ..")
+                    pdf = document.data
+                    if pdf is not None:
+                        unique_key = f"document_pdf_{time.time_ns()}"
+                        st.pdf(pdf, key=unique_key)
+                except Exception as err:
+                    st.error(err)
 
 # MARK: show_asset_management
 def show_asset_management(container, device: lads.Device):
@@ -645,7 +650,7 @@ def show_active_program(container, functional_unit: lads.FunctionalUnit) -> any:
                 key_value_df = st.data_editor(pd.DataFrame({"Key": ["My Property"], "Value": ["42.0"]}, dtype="string"),
                                             column_config={"Key": st.column_config.TextColumn(), 
                                                             "Value": st.column_config.TextColumn()},
-                                            num_rows="dynamic", hide_index=True, use_container_width=True)
+                                            num_rows="dynamic", hide_index=True, width="stretch")
             job_id = st.text_input("Supervisory job id", value="My Job")
             task_id = st.text_input("Supervisory task id", value="My Task")
             with st.expander("Samples", expanded=False):
@@ -655,7 +660,7 @@ def show_active_program(container, functional_unit: lads.FunctionalUnit) -> any:
                                                             "Position": st.column_config.TextColumn(),
                                                             "CustomData": st.column_config.TextColumn(),
                                                             },
-                                            num_rows="dynamic", hide_index=True, use_container_width=True)
+                                            num_rows="dynamic", hide_index=True, width="stretch")
             if st.form_submit_button("Start Program", help="**Start's a program run** based on the selected program-template.  \r\nIf you want to manually stop or abort the current run, utilize the functional-unit's commands (drop-down next to the unit's state indicator)."):
                     functional_unit.functional_unit_state.start_program(template_id, key_value_df, job_id, task_id, samples_df)
 
@@ -748,6 +753,7 @@ def update_result_set(container, functional_unit: lads.FunctionalUnit):
 
 selectedFunctionalUnitKey = "selected_functional_unit"
 lastEventListUpdateKey = "last_event_list_update"
+selectedDocumentKey = "selected_document"
 
 # MARK: empty
 def empty(container):
@@ -863,7 +869,7 @@ def main():
 
         if tab_documents is not None:
             with tab_documents:
-                container_documents = show_documents(empty(st.empty()), document_set)
+                container_documents, container_document_detail = show_documents(empty(st.empty()), document_set)
 
         # Display the events table
         with st.container():
@@ -881,13 +887,13 @@ def main():
                 update_events(container_events, selected_functional_unit)
                 update_active_program(progress_container, selected_functional_unit)
                 update_asset_management(container_device, container_map, container_components, selected_functional_unit.device)
-                if tab_documents is not None:
-                    update_documents(container_documents, document_set)
                 index += 1
                 if index >= 5:
                     index = 0
                     update_charts(container_chart, selected_functional_unit, True)
                     update_result_set(container_results, selected_functional_unit)
+                    if tab_documents is not None:
+                        update_documents(container_documents, container_document_detail, document_set)
                 time.sleep(1)
 
         update_loop()
