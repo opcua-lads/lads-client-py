@@ -17,6 +17,7 @@ from typing import Tuple
 from asyncua import ua
 import lads_opcua_client as lads
 import atexit
+from lads_opcua_viewer.dcc.dcc_md import generate_markdown_from_dcc_xml
 
 # For disabling the exit of the threadpool executor
 # This is necessary to avoid an error message when the app is closed
@@ -310,6 +311,7 @@ def update_charts(container, functional_unit: lads.FunctionalUnit, use_plotly=Tr
             with st.expander("**Chart**", expanded=(idx==0)):
                 unique_key = f"plotly_chart_{time.time_ns()}"
                 st.plotly_chart(fig, use_container_width=True, key=unique_key)
+                # st.plotly_chart(fig, width="stretch", key=unique_key)
                 idx += 1
         else:
             for trace in traces:
@@ -350,11 +352,8 @@ def update_charts(container, functional_unit: lads.FunctionalUnit, use_plotly=Tr
                             )
                         except AttributeError:
                             ' do nothing'
-                    st.dataframe(
-                        df,
-                        use_container_width=True, 
-                        hide_index=True,
-                    )
+                    # st.dataframe(df, use_container_width=True, hide_index=True)
+                    st.dataframe(df, width="Stretch", hide_index=True)
                 else:
                     eu = analog_item.engineering_units
                     col = eu.DisplayName.Text if eu is not None else "y"
@@ -381,7 +380,8 @@ def update_events(container, device: lads.Device):
             event_columns = events[["Time", "Severity", "SourceName", "Message"]]
             st.dataframe(
                 event_columns, 
-                use_container_width=True, 
+                #use_container_width=True, 
+                width="stretch", 
                 hide_index=True,
                 column_config={
                     "Time": st.column_config.Column(
@@ -427,27 +427,28 @@ def show_variables_table(variables: list[lads.BaseVariable], has_description: bo
             None, 
             help="Variable name",
             disabled=True,
-            # width="medium"
         ),
         "Value": st.column_config.Column(
             None, 
             help="Variable value",
             disabled=True,
-            # width="medium"
         ),
         "Description": st.column_config.Column(
             None, 
             help="Variable description",
             disabled=True,
-            # width="large"
         ),
     }
-    st.dataframe(data, use_container_width=True, hide_index=True, column_config=column_config)
+    # st.dataframe(data, use_container_width=True, hide_index=True, column_config=column_config)
+    st.dataframe(data, width="stretch", hide_index=True, column_config=column_config)
 
 # MARK: show_documents
 def show_documents(container, document_set: lads.LADSSet):
     with container.container():
         container_documents, container_document_detail = st.columns([0.25, 0.75])
+        with container_documents:
+            if st.button("Refresh"):
+                pass
     render_documents(container_documents, container_document_detail, document_set)
     return container_documents, container_document_detail
 
@@ -483,20 +484,21 @@ def render_documents(container_documents, container_document_detail, document_se
                          "Content": content, "Mime Type": mime_type, "Schema URI": schema_uri })
     # build view
     with container_documents:
-        st.markdown("**Overview**")
         unique_key = f"select_document"
         selected_name = st.radio("Select a document", options=data["Name"], key=unique_key, index=0)
     with container_document_detail:
-        st.markdown("**Details**")
         if selected_name is None:
             st.write("Select a document")
         else:
             selected = data[data["Name"] == selected_name].iloc[0]
             d = data[data["Name"] == selected_name]
-            index = d.index.to_list()[0]
-            st.write(f"Index {index}")
-            unique_key = f"document_table_{time.time_ns()}"
             st.dataframe(d, column_order=["Name", "Issued At", "Valid From", "Valid Until", "Mime Type", "Schema URI"], hide_index=True, key=unique_key)
+            index = d.index.to_list()[0]
+            document: lads.LADSNode = documents[index]
+            st.markdown(f"***Ontology Definitions***  \r\n{document.dictionary_entries_as_markdown}")
+            references: list[str] = document.references_markdown
+            st.markdown(f"***References***  \r\n{"  \r\n".join(references)}")
+            unique_key = f"document_table_{time.time_ns()}"
             mime_type: str = selected["Mime Type"]
             content: str = selected["Content"]
             if content is not None:
@@ -505,10 +507,17 @@ def render_documents(container_documents, container_document_detail, document_se
                 elif mime_type.find("json") >= 0:
                     st.json(content)
                 elif mime_type.find("xml") >= 0:
-                    st.code(content, language="xml")
+                    if mime_type.find("dcc") >= 0:
+                        tab_md, tab_xml = st.tabs(["Human Readable", "Raw XML"])
+                        with tab_md:
+                            md = generate_markdown_from_dcc_xml(content)
+                            st.markdown(md)
+                        with tab_xml:
+                            st.code(content, language="xml", height=500)
+                    else:
+                        st.code(content, language="xml")
             if mime_type.find("pdf") >= 0:
                 try:
-                    document = documents[index]
                     if not document.has_data():
                         document.fetch_data()
                         st.text("Loading PDF ..")
@@ -568,6 +577,7 @@ def update_asset_management(container_device, container_map, container_component
                 "color": color,
                 })
             st.map(df, zoom=8, use_container_width=True)
+            # st.map(df, zoom=8, width="stretch")
     with container_components.container():
         show_components(device, expanded_count=1)
 

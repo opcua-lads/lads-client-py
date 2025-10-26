@@ -552,10 +552,42 @@ class LADSNode(Node):
                 return ua.FourByteNodeId(nodeid)
             else:
                 return ua.NumericNodeId(nodeid)
-
+        
         desc = ua.BrowseDescription()
         desc.BrowseDirection = direction
         desc.ReferenceTypeId = _to_nodeid(refs)
+        desc.IncludeSubtypes = includesubtypes
+        desc.NodeClassMask = nodeclassmask
+        desc.ResultMask = result_mask
+        desc.NodeId = self.nodeid
+        params = ua.BrowseParameters()
+        params.View.Timestamp = ua.get_win_epoch()
+        params.NodesToBrowse.append(desc)
+        params.RequestedMaxReferencesPerNode = 0
+        results = await self.session.browse(params)
+        references = await self._browse_next(results)
+        return references
+    
+    async def get_references_of_type(
+        self,
+        reference_type: Node,
+        direction: ua.BrowseDirection = ua.BrowseDirection.Both,
+        nodeclassmask: ua.NodeClass = ua.NodeClass.Unspecified,
+        includesubtypes: bool = True,
+        result_mask: ua.BrowseResultMask = ua.BrowseResultMask.All
+    ) -> List[ua.ReferenceDescription]:
+        """
+        returns references of the node based on specific filter defined with:
+
+        refs = ObjectId of the Reference
+        direction = Browse direction for references
+        nodeclassmask = filter nodes based on specific class
+        includesubtypes = If true subtypes of the reference (ref) are also included
+        result_mask = define what results information are requested
+        """
+        desc = ua.BrowseDescription()
+        desc.BrowseDirection = direction
+        desc.ReferenceTypeId = reference_type.nodeid
         desc.IncludeSubtypes = includesubtypes
         desc.NodeClassMask = nodeclassmask
         desc.ResultMask = result_mask
@@ -1655,18 +1687,18 @@ class ResultFile(LADSNode):
 
     async def download(self):
         try:
-            _logger.debug("start downloading file data ..")
+            _logger.debug(f"{self.display_name} start downloading file data ..")
             async with UaFile(self.file, "r") as ua_file:
                 self.data = await ua_file.read()
-                _logger.debug("finished downloading file data ..")
+                _logger.debug(f"{self.display_name} finished downloading file data ..")
         except:
-            _logger.error("Failed reading file")
+            _logger.error(f"{self.display_name} failed reading file")
         
     def has_data(self) -> bool:
         return self.data is not None
 
     def fetch_data(self):
-        _logger.debug("fetching file data ..")
+        _logger.debug(f"{self.display_name} fetching file data ..")
         self.call_async(self.download())
 
     @property
@@ -1833,6 +1865,9 @@ class ComplianceDocument(LADSNode):
     content: BaseVariable
     file: LADSNode
     data: Any
+    downloading: bool = False
+    applies_to: list[LADSNode]
+    references_markdown: list[str]
     subscription_handler: SubscriptionHandler
 
     @classmethod
@@ -1850,27 +1885,49 @@ class ComplianceDocument(LADSNode):
         self.schema_uri = await self.get_lads_cd_variable("SchemaUri")
         self.file = await self.get_lads_cd_child("File")
         self.data = None
+        ref_type: ua.ReferenceDescription = server.HasComplianceDocument
+        _logger.debug(ref_type)
+        references = await self.get_references_of_type(ref_type)
+        self.applies_to = []
+        self.references_markdown = []
+        for desc in references:
+            node = server.get_node(desc.NodeId)
+            type_node_id = await node.read_type_definition()
+            type_node = server.get_node(type_node_id)
+            ref_type_node = server.get_node(desc.ReferenceTypeId)
+            # _logger.debug(f"Reference --{await type_node.read_display_name()}-->{await node.read_display_name()}")
+            self.applies_to.append(node)
+            node_name, node_type_name, ref_type_name = await asyncio.gather(node.read_display_name(), type_node.read_display_name(), ref_type_node.read_display_name())
+            markdown = f"**{node_name.Text}**: *{node_type_name.Text}* -> {ref_type_name.Text} -> **{self.display_name}**"
+            self.references_markdown.append(markdown)
+            _logger.debug(markdown)
 
     async def download(self):
         try:
-            _logger.debug("start downloading file data ..")
+            self.downloading = True
+            _logger.debug(f"{self.display_name} start downloading file data ..")
             async with UaFile(self.file, "r") as ua_file:
                 self.data = await ua_file.read()
-                _logger.debug("finished downloading file data ..")
+                _logger.debug(f"{self.display_name} finished downloading file data ..")
+                self.downloading = False
         except:
-            _logger.error("Failed reading file")
+            _logger.error(f"{self.display_name} failed reading file")
         
     def has_data(self) -> bool:
         return self.data is not None
 
     def fetch_data(self):
-        _logger.debug("fetching file data ..")
-        self.call_async(self.download())
-
+        if self.downloading:
+            _logger.debug(f"{self.display_name} download already active ..")
+        else:
+            _logger.debug(f"{self.display_name} fetching file data ..")
+            self.call_async(self.download())
+    """
+    # Since all information is static don't attach it to a subscription group
     @property
     def variables(self) ->list[BaseVariable]:
         return remove_none([self.document_name, self.issued_at, self.valid_from, self.valid_until, self.mime_type, self.content])
-
+    """
 
 # MARK: FunctionalUnit
 class FunctionalUnit(LADSNode):
