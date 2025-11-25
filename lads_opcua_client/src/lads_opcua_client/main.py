@@ -141,7 +141,10 @@ class LADSTypes:
         self.ns_AMB = await self.client.get_namespace_index("http://opcfoundation.org/UA/AMB/")
         self.ns_Machinery = await self.client.get_namespace_index("http://opcfoundation.org/UA/Machinery/")
         self.ns_LADS = await self.client.get_namespace_index("http://opcfoundation.org/UA/LADS/")
-        self.ns_LADS_CD = await self.client.get_namespace_index("http://aixengineers.de/LADS-CD/")
+        try:
+            self.ns_LADS_CD = await self.client.get_namespace_index("http://aixengineers.de/LADS-CD/")
+        except:
+            self.ns_LADS_CD = None
 
         # get well known type nodes
         self.BaseObjectType = self.get_node(ua.ObjectIds.BaseObjectType)
@@ -188,12 +191,13 @@ class LADSTypes:
         self.ResultFileType = self.get_lads_node(LADSObjectIds.ResultFileType)
         self.VariableSetType = self.get_lads_node(LADSObjectIds.VariableSetType)
         # LADS Compliance Documemts (experimental)
-        self.ComplianceDocumentSetType = self.get_lads_cd_node(LADS_CD_ObjectIds.ComplianceDocumentSetType)
-        self.ComplianceDocumentType = self.get_lads_cd_node(LADS_CD_ObjectIds.ComplianceDocumentType)
-        self.HasComplianceDocument = self.get_lads_cd_node(LADS_CD_ObjectIds.HasComplianceDocument)
-        self.HasCalibrationCertificate = self.get_lads_cd_node(LADS_CD_ObjectIds.HasCalibrationCertificate)
-        self.HasValidationReport = self.get_lads_cd_node(LADS_CD_ObjectIds.HasValidationReport)
-        self.HasQualificationProtocol = self.get_lads_cd_node(LADS_CD_ObjectIds.HasQualificationProtocol)
+        if self.ns_LADS_CD is not None:
+            self.ComplianceDocumentSetType = self.get_lads_cd_node(LADS_CD_ObjectIds.ComplianceDocumentSetType)
+            self.ComplianceDocumentType = self.get_lads_cd_node(LADS_CD_ObjectIds.ComplianceDocumentType)
+            self.HasComplianceDocument = self.get_lads_cd_node(LADS_CD_ObjectIds.HasComplianceDocument)
+            self.HasCalibrationCertificate = self.get_lads_cd_node(LADS_CD_ObjectIds.HasCalibrationCertificate)
+            self.HasValidationReport = self.get_lads_cd_node(LADS_CD_ObjectIds.HasValidationReport)
+            self.HasQualificationProtocol = self.get_lads_cd_node(LADS_CD_ObjectIds.HasQualificationProtocol)
 
         # read data tyoes only once - asyncua design problem..
         if Connection.data_types is None:
@@ -236,7 +240,10 @@ class LADSTypes:
         return self.client.get_node(ua.NodeId(int(id), self.ns_LADS))
 
     def get_lads_cd_node(self, id: int) -> Node | None:
-        return self.client.get_node(ua.NodeId(int(id), self.ns_LADS_CD))
+        if self.ns_LADS_CD is not None:
+            return self.client.get_node(ua.NodeId(int(id), self.ns_LADS_CD))
+        else:
+            return None
 
 # MARK: Server
 class Server(LADSTypes):
@@ -669,11 +676,17 @@ class LADSNode(Node):
         return await BaseVariable.promote(await self.get_lads_child(name), self.server)
     
     async def get_lads_cd_child(self, name : str) -> Node:
-        return await self.get_child_or_none(ua.QualifiedName(name, self.server.ns_LADS_CD))
+        if self.server.ns_LADS_CD is not None:
+            return await self.get_child_or_none(ua.QualifiedName(name, self.server.ns_LADS_CD))
+        else:
+            return None
     
     async def get_lads_cd_variable(self, name : str) -> BaseVariable:
-        return await BaseVariable.promote(await self.get_lads_cd_child(name), self.server)
-    
+        if self.server.ns_LADS_CD is not None:
+            return await BaseVariable.promote(await self.get_lads_cd_child(name), self.server)
+        else:
+            return None
+            
     async def get_child_objects(self, parent: Node = None) -> list[Node]:
         if parent is None: parent = self
         # search for HasChild and Organizes references
@@ -1411,12 +1424,13 @@ class Device(Component):
             location.subscription_level = SubscriptionLevel.Temporary
         
         # compliance documents
-        self.compliance_document_set = await ComplianceDocumentSet.promote(await self.get_lads_cd_child("ComplianceDocumentSet"), self.server)
-        if self.compliance_document_set is not None:
-            _logger.debug("loading compliance documents")
-            await self.compliance_document_set.promote_children(ComplianceDocument, self.server.ComplianceDocumentType, self.server.ComplianceDocumentSetType)
-        else:
-            _logger.debug("unable to find compliance document set")
+        if server.ns_LADS_CD is not None:
+            self.compliance_document_set = await ComplianceDocumentSet.promote(await self.get_lads_cd_child("ComplianceDocumentSet"), self.server)
+            if self.compliance_document_set is not None:
+                _logger.debug("loading compliance documents")
+                await self.compliance_document_set.promote_children(ComplianceDocument, self.server.ComplianceDocumentType, self.server.ComplianceDocumentSetType)
+            else:
+                _logger.debug("unable to find compliance document set")
 
 
     async def finalize_init(self):
@@ -1886,7 +1900,6 @@ class ComplianceDocument(LADSNode):
         self.file = await self.get_lads_cd_child("File")
         self.data = None
         ref_type: ua.ReferenceDescription = server.HasComplianceDocument
-        _logger.debug(ref_type)
         references = await self.get_references_of_type(ref_type)
         self.applies_to = []
         self.references_markdown = []
@@ -1895,12 +1908,10 @@ class ComplianceDocument(LADSNode):
             type_node_id = await node.read_type_definition()
             type_node = server.get_node(type_node_id)
             ref_type_node = server.get_node(desc.ReferenceTypeId)
-            # _logger.debug(f"Reference --{await type_node.read_display_name()}-->{await node.read_display_name()}")
             self.applies_to.append(node)
             node_name, node_type_name, ref_type_name = await asyncio.gather(node.read_display_name(), type_node.read_display_name(), ref_type_node.read_display_name())
             markdown = f"**{node_name.Text}**: *{node_type_name.Text}* -> {ref_type_name.Text} -> **{self.display_name}**"
             self.references_markdown.append(markdown)
-            _logger.debug(markdown)
 
     async def download(self):
         try:
