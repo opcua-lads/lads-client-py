@@ -930,6 +930,8 @@ class NodeVersionVariable(SubscribedVariable):
 
 # MARK: StateVariable
 class StateVariable(SubscribedVariable):
+    id: BaseVariable = None
+    effective_display_name: BaseVariable = None
     alternate_display_name: str = None
 
     @classmethod
@@ -938,6 +940,17 @@ class StateVariable(SubscribedVariable):
         variable.subscription_level = SubscriptionLevel.Permanent
         return await promote_to(StateVariable, node, server.BaseVariableType, server)
 
+    async def init(self, server: Server):
+        await super().init(server)
+        variables = await self.get_children(nodeclassmask=ua.NodeClass.Variable)
+        for variable in variables:
+            browse_name = await variable.read_browse_name()
+            name = browse_name.Name
+            if name == "EffectiveDisplayName":                
+                self.effective_display_name = await BaseVariable.promote(variable, server)
+            elif name == "Id":               
+                self.id = await BaseVariable.promote(variable, server)            
+        
     @property
     def value_str(self) -> str:
         s =  super().value_str
@@ -1127,6 +1140,13 @@ class StateMachine(LADSNode):
         self.methods_dict = {method.display_name: method for method in self.methods}
     
     @property
+    def current_state_str(self) -> str:
+        result = self.current_state.value_str
+        if self.current_state.effective_display_name is not None:
+            result = self.current_state.effective_display_name.value_str
+        return result
+            
+    @property
     def method_names(self) -> list[str]:
         return self.methods_dict.keys()
     
@@ -1142,7 +1162,7 @@ class StateMachine(LADSNode):
 
     @property
     def variables(self) -> list[BaseVariable]:
-        return super().variables + [self.current_state]
+        return super().variables + remove_none([self.current_state, self.current_state.effective_display_name])
 
 # MARK: FunctionalStateMachine
 class FunctionalStateMachine(StateMachine):
@@ -1150,6 +1170,13 @@ class FunctionalStateMachine(StateMachine):
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(FunctionalStateMachine, node, server.FiniteStateMachineType, server)
     
+    async def init(self, server: Server):
+        await super().init(server)
+        try:
+            self.running_state_machine = await StateMachine.promote(await self.get_lads_child("RunningStateMachine"), server)
+        except:
+            self.running_state_machine = None
+                
     def buildProperties(self, properties: pd.DataFrame) -> list:
         key_value_list = None
         for index, row in properties.iterrows():
@@ -1622,6 +1649,7 @@ class FunctionSet(LADSSet):
             elif server.MultiModeControlFunctionType in types:
                 function = await MulitModeControlFunction.promote(child, server)
             else:
+                # _logger.debug("Unknown function ", child)
                 function = await Function.promote(child, server)
         except Exception as error:
             _logger.error(error)
@@ -2029,6 +2057,10 @@ class FunctionalUnit(LADSNode):
     @property
     def current_state(self) -> StateVariable:
         return self.functional_unit_state.current_state
+    
+    @property
+    def current_state_str(self) -> StateVariable:
+        return self.functional_unit_state.current_state_str
     
     @property
     def functions(self) -> list[Function]:

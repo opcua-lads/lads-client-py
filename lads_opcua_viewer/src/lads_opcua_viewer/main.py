@@ -640,8 +640,9 @@ def show_state(container, functional_unit: lads.FunctionalUnit) -> any:
 # MARK: update_state
 def update_state(container, functional_unit: lads.FunctionalUnit) -> bool:
     current_state_var = functional_unit.current_state
+    current_state_str = functional_unit.current_state_str
     with container:
-        st.markdown(f":{state_color(current_state_var)}[**{current_state_var.value_str}**]", help=current_state_var.dictionary_entries_as_markdown)
+        st.markdown(f":{state_color(current_state_var)}[**{current_state_str}**]", help=current_state_var.dictionary_entries_as_markdown)
     return False
 
 # MARK: show_active_program
@@ -822,17 +823,31 @@ def main():
     st.subheader("LADS OPC UA Client", help=selected_functional_unit.device.dictionary_entries_as_markdown)
     
     with st.expander(f"**{selected_functional_unit.at_name}**", expanded=True):
-        col_cmd, col_state, col_definition = st.columns([2, 3, 2])
+        state_machine = selected_functional_unit.functional_unit_state
+        running_state_machine = state_machine.running_state_machine
+        columns = [2, 2, 3, 2] if running_state_machine is not None else [2, 0.1, 3, 2]
+        col_cmd, col_cmd_running, col_state, col_definition = st.columns(columns)
         with col_cmd:
-            state_machine = selected_functional_unit.functional_unit_state
             # for the command select box extract methods without input arguments (except Start)
             methods = list(filter(lambda method: (len(method.input_arguments) == 0) | (method.display_name == "Start"), state_machine.methods))
             method_names = map(lambda method: method.display_name, methods)
-            cmd = st.selectbox("Command", options=method_names, index=None, label_visibility="collapsed", placeholder="Choose a command")
-            if cmd == "Start":
-                state_machine.start(pd.DataFrame())
+            if False:
+                for name in method_names:
+                    on_click = state_machine.start(pd.DataFrame()) if name == "Start" else state_machine.call_method_by_name(name) 
+                    st.button(name, on_click=on_click)
             else:
-                state_machine.call_method_by_name(cmd)
+                cmd = st.selectbox("Command", options=method_names, index=None, label_visibility="collapsed", placeholder="Choose a command")
+                if cmd == "Start":
+                    state_machine.start(pd.DataFrame())
+                else:
+                    state_machine.call_method_by_name(cmd)
+
+        with col_cmd_running:
+            if running_state_machine is not None:
+                methods = running_state_machine.methods
+                method_names = map(lambda method: method.display_name, methods)
+                cmd = st.selectbox("Command", options=method_names, index=None, label_visibility="collapsed", placeholder="Choose a command")
+                running_state_machine.call_method_by_name(cmd)                
         with col_state:
             container_state = show_state(col_state, selected_functional_unit)
         with col_definition:
