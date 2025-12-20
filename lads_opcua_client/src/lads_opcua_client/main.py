@@ -1367,6 +1367,9 @@ class Component(LADSNode):
     
     async def init(self, server: Server):
         await super().init(server)
+        self.operation_counters = await OperationCounters.promote(await self.get_di_child("OperationCounters"), server)
+        self.lifetime_counter_set = await LifetimeCounters.promote(await self.get_machinery_child("LifetimeCounters"), server)
+        self.identification = await Identification.promote(await self.get_di_child("Identification"), server)
         self._variables = await get_properties_and_variables(self)
         self._variables.sort(key = lambda variable: variable.display_name)
         self.device_health = self.variable_named("DeviceHealth")
@@ -1375,9 +1378,6 @@ class Component(LADSNode):
         self.component_set = await ComponentSet.promote(await self.get_machinery_child("Components"), server)
         if self.component_set is not None:
             await self.component_set.promote_children(Component, server.ComponentType, server.ComponentSetType)
-        self.operation_counters = await OperationCounters.promote(await self.get_di_child("OperationCounters"), server)
-        self.lifetime_counter_set = await LifetimeCounters.promote(await self.get_machinery_child("LifetimeCounters"), server)
-        self.identification = await Identification.promote(await self.get_di_child("Identification"), server)
 
     @property
     def components(self) -> list[Component]:
@@ -1389,7 +1389,10 @@ class Component(LADSNode):
     
     @property
     def variables(self) ->list[BaseVariable]:
-        return self._variables +  [] if self.component_set is None else remove_none([self.component_set.node_version])
+        ltc_variables: list[BaseVariable] = []
+        for ltc in self.lifetime_counters:
+            ltc_variables.append(ltc)
+        return self._variables + ltc_variables + [] if self.component_set is None else remove_none([self.component_set.node_version])
 
     @property
     def name_plate_variables(self) ->list[BaseVariable]:
