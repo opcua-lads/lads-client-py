@@ -349,7 +349,16 @@ def variant_value_to_str(variant: ua.Variant) -> str:
     elif isinstance(value, dt.datetime):
         return  value.strftime("%d.%m.%Y %H:%M:%S")
     else:
-        return str(value)
+        s = str(value)
+        if s.startswith("NameNodeIdDataType"):
+            try:
+                name: ua.LocalizedText = value.Name
+                node_id: ua.NodeId = value.NodeId
+                return name.Text
+            except:
+                return s
+        else:
+            return s
 
 def remove_none(nodes: list[Node]) -> list[Node]:
     return list(filter(lambda node: node is not None, nodes))
@@ -1835,11 +1844,11 @@ class ActiveProgram(LADSNode):
         return self._variables
     
     @property
-    def has_progress(self) -> bool:
+    def has_runtime_progress(self) -> bool:
         return not (self.current_runtime is None or self.estimated_runtime is None)
     
     @property
-    def current_progress(self) -> float:
+    def current_runtime_progress(self) -> float:
         try:
             progress = max(min(self.current_runtime.value / self.estimated_runtime.value, 1), 0)
             return progress
@@ -1847,16 +1856,29 @@ class ActiveProgram(LADSNode):
             return 0.0
 
     @property
-    def has_step_progress(self) -> bool:
+    def has_step_runtime_progress(self) -> bool:
         return not (self.current_step_runtime is None or self.estimated_step_runtime is None)
     
     @property
-    def current_step_progress(self) -> float:
+    def current_step_runtime_progress(self) -> float:
         try:
             progress = max(min(self.current_step_runtime.value / self.estimated_step_runtime.value, 1), 0)
             return progress
         except:
             return 0.0
+
+    @property
+    def has_step_number_progress(self) -> bool:
+        return not (self.current_step_number is None or self.estimated_step_numbers is None)
+
+    @property
+    def current_step_number_progress(self) -> float:
+        try:
+            progress = max(min(self.current_step_number.value / self.estimated_step_numbers.value, 1), 0)
+            return progress
+        except:
+            return 0.0
+    
 
 # MARK: ProgramManager
 class ProgramManager(LADSNode):

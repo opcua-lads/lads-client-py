@@ -638,12 +638,19 @@ def show_state(container, functional_unit: lads.FunctionalUnit) -> any:
     return container_state
 
 # MARK: update_state
-def update_state(container, functional_unit: lads.FunctionalUnit) -> bool:
+def update_state(container, functional_unit: lads.FunctionalUnit):
     current_state_var = functional_unit.current_state
     current_state_str = functional_unit.current_state_str
     with container:
-        st.markdown(f":{state_color(current_state_var)}[**{current_state_str}**]", help=current_state_var.dictionary_entries_as_markdown)
-    return False
+        message = f":{state_color(current_state_var)}[**{current_state_str}**]"
+        if str(current_state_var.value_str) == "Running":
+            active_program = functional_unit.program_manager.active_program
+            if active_program is not None:
+                if active_program.current_program_template is not None:
+                    message = message + f"  \nProgram template: {active_program.current_program_template.value_str}"
+                    if active_program.current_step_name is not None:
+                        message = message + f"  \nProgram step: {active_program.current_step_name.value_str}"
+        st.markdown(message, help=current_state_var.dictionary_entries_as_markdown)
 
 # MARK: show_active_program
 def show_active_program(container, functional_unit: lads.FunctionalUnit) -> any:
@@ -702,13 +709,18 @@ def update_active_program(progress_container, functional_unit: lads.FunctionalUn
         if program_manager is not None: 
             if state_changed or running:
                 active_program = program_manager.active_program
-                if active_program.has_progress:
-                    st.progress(active_program.current_progress, "Program run progress")
+                if active_program.has_runtime_progress:
+                    st.progress(active_program.current_runtime_progress, "Program run-time progress")
                     st.write(f"{format_number(0.001 * to_float(active_program.current_runtime.value))}s / {format_number(0.001 * to_float(active_program.estimated_runtime.value))}s")
-                if active_program.has_step_progress:
+                if active_program.has_step_number_progress:
+                    st.progress(active_program.current_step_number_progress, "Program steps progress")
+                    s = f"{active_program.current_step_number.value} / {active_program.estimated_step_numbers.value}"
                     step_name = active_program.current_step_name
-                    label = "Program step progress" if step_name is None else f"Program step '{step_name.value_str}' progress" 
-                    st.progress(active_program.current_step_progress, text=label)
+                    if step_name is not None:
+                        s = s + f" '{step_name.value_str}'"
+                    st.write(s)
+                if active_program.has_step_runtime_progress:
+                    st.progress(active_program.current_step_runtime_progress, "Program step run-time progress")
                     st.write(f"{format_number(0.001 * to_float(active_program.current_step_runtime.value))}s / {format_number(0.001 * to_float(active_program.estimated_step_runtime.value))}s")
                 with st.expander("Program run details", expanded=False):
                     show_variables_table(active_program.variables)
