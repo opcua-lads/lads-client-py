@@ -208,12 +208,27 @@ def update_functions(function_containers: dict):
             with pv_col: 
                 st.markdown(f":{variable_status_color(function.current_value)}[**{function.current_value.value_str}**]", help=function.current_value.dictionary_entries_as_markdown)
         elif isinstance(function, lads.AnalogScalarSensorFunction):
+            sensor_function: lads.AnalogScalarSensorFunction = function
             if isinstance(function, lads.AnalogScalarSensorFunctionWithCompensation):
                 if function.compensation_value is not None:
                     with sp_col:
                         st.markdown(f":gray[{format_value(function.compensation_value.value)} {function.compensation_value.eu}]", help=function.compensation_value.dictionary_entries_as_markdown)
             with pv_col:
-                st.markdown(f":{variable_status_color(function.sensor_value)}[**{format_value(function.sensor_value.value)}** {function.sensor_value.eu}]", help=function.sensor_value.dictionary_entries_as_markdown)
+                alarm_indicator = ""
+                if sensor_function.alarm_active:
+                    limit: str = sensor_function.alarm_limit
+                    match limit:
+                        case "High":
+                            alarm_indicator = "🔺"
+                        case "HighHigh":
+                            alarm_indicator = "🔺🔺"
+                        case "Low":
+                            alarm_indicator = "🔻"
+                        case "LowLow":
+                            alarm_indicator = "🔻🔻"
+                        case _:
+                            alarm_indicator = "⚠️"
+                st.markdown(f":{variable_status_color(function.sensor_value)}[**{format_value(function.sensor_value.value)}** {function.sensor_value.eu} {alarm_indicator}]", help=function.sensor_value.dictionary_entries_as_markdown)
 
         elif isinstance(function, lads.TwoStateDiscreteSensorFunction) or isinstance(function, lads.MultiStateDiscreteSensorFunction):
             with pv_col: 

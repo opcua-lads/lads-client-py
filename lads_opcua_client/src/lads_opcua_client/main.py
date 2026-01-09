@@ -2146,6 +2146,9 @@ class BaseSensorFunction(Function):
 
 # MARK: AnalogScalarSensorFunction
 class AnalogScalarSensorFunction(BaseSensorFunction):
+    alarm_active_state: StateVariable = None
+    alarm_limit_state: StateVariable = None
+
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(AnalogScalarSensorFunction, node, server.AnalogScalarSensorFunctionType, server)
@@ -2153,6 +2156,32 @@ class AnalogScalarSensorFunction(BaseSensorFunction):
     async def init(self, server: Server):
         await super().init(server)        
         self.sensor_value = await get_lads_analog_item(self, "SensorValue")
+        try:
+            alarm_monitor = await self.get_lads_child("AlarmMonitor")
+            if alarm_monitor is not None:
+                self.alarm_active_state = await StateVariable.promote(await alarm_monitor.get_child("ActiveState"), server)
+                limit_state = await alarm_monitor.get_child("LimitState")
+                if limit_state is not None:
+                    self.alarm_limit_state = await StateVariable.promote(await limit_state.get_child("CurrentState"), server)
+                _logger.debug(f"Initialized AlarmMonitor of {self.display_name}")
+        except:
+            pass
+    @property 
+    def alarm_active(self) -> bool:
+        if self.alarm_active_state is None:
+            return False
+        return self.alarm_active_state.value_str == "Active"
+    
+    @property 
+    def alarm_limit(self) -> str:
+        if (self.alarm_limit_state is None):
+            return ""
+        return self.alarm_limit_state.value_str
+        
+    @property
+    def variables(self) ->list[BaseVariable]:
+        return super().variables + remove_none([self.alarm_active_state, self.alarm_limit_state])
+        
 
 # MARK: AnalogScalarSensorFunctionWithCompensation
 class AnalogScalarSensorFunctionWithCompensation(AnalogScalarSensorFunction):
