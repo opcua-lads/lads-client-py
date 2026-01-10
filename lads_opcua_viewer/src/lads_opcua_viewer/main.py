@@ -215,19 +215,21 @@ def update_functions(function_containers: dict):
                         st.markdown(f":gray[{format_value(function.compensation_value.value)} {function.compensation_value.eu}]", help=function.compensation_value.dictionary_entries_as_markdown)
             with pv_col:
                 alarm_indicator = ""
-                if sensor_function.alarm_active:
-                    limit: str = sensor_function.alarm_limit
-                    match limit:
-                        case "High":
-                            alarm_indicator = "🔺"
-                        case "HighHigh":
-                            alarm_indicator = "🔺🔺"
-                        case "Low":
-                            alarm_indicator = "🔻"
-                        case "LowLow":
-                            alarm_indicator = "🔻🔻"
-                        case _:
-                            alarm_indicator = "⚠️"
+                if sensor_function.has_alarm_monitor:
+                    alarm_indicator = "🔹"
+                    if sensor_function.alarm_active:
+                        limit: str = sensor_function.alarm_limit
+                        match limit:
+                            case "High":
+                                alarm_indicator = "🔺"
+                            case "HighHigh":
+                                alarm_indicator = "🔺🔺"
+                            case "Low":
+                                alarm_indicator = "🔻"
+                            case "LowLow":
+                                alarm_indicator = "🔻🔻"
+                            case _:
+                                alarm_indicator = "⚠️"
                 st.markdown(f":{variable_status_color(function.sensor_value)}[**{format_value(function.sensor_value.value)}** {function.sensor_value.eu} {alarm_indicator}]", help=function.sensor_value.dictionary_entries_as_markdown)
 
         elif isinstance(function, lads.TwoStateDiscreteSensorFunction) or isinstance(function, lads.MultiStateDiscreteSensorFunction):
@@ -614,15 +616,16 @@ def show_components(component: lads.Component, expanded_count):
                 for counter in component.lifetime_counters:
                     try:
                         value = to_float(counter.value, default=0.0)
-                        start = to_float(counter.start_value.value, default=0.0)
-                        limit = to_float(counter.limit_value.value, default=100.0)
+                        start = to_float(counter.start_value.value, default=100.0)
+                        limit = to_float(counter.limit_value.value, default=0.0)
                         eu = counter.eu
                         warning = False if counter.warning_values is None else any(value < float(warning_value) for warning_value in counter.warning_values.value)
-                        color = "red" if warning else "green"
+                        alarm = value < limit
+                        color = "red" if alarm else "orange" if warning else "green"
                         s = f"{counter.display_name} [{format_number(start)} > :{color}[**{format_number(value)}**] > {format_number(limit)}] {eu}"
                         r = start - limit
                         x = value / r + limit if abs(r) > 0 else 0
-                        st.progress(x, s)  
+                        st.progress(x if x > 0 else 0, s)  
                     except Exception as e:
                         pass
 

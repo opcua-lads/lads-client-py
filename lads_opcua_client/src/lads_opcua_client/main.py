@@ -1405,7 +1405,7 @@ class Component(LADSNode):
 
     @property
     def name_plate_variables(self) ->list[BaseVariable]:
-        return self._variables if self.identification is None else self.identification.variables
+        return self._variables if self.identification is None else remove_none([self.device_health] + self.identification.variables)
 
 # MARK: Device
 class Device(Component):
@@ -1481,6 +1481,14 @@ class Device(Component):
             variables = variables + functional_unit.all_subscribed_variables
         if self.identification is not None:
             variables = variables + self.identification.subscribed_variables
+        for component in self.components:
+            variables = variables + component.subscribed_variables 
+            if component.identification is not None:
+                variables = variables + component.identification.subscribed_variables
+            if component.operation_counters is not None:
+                variables = variables + component.operation_counters.subscribed_variables
+            for lifetime_counter in component.lifetime_counters:
+                variables = variables + lifetime_counter.subscribed_variables
         self.subscription_handler = SubscriptionHandler()
         data_change_handlers = await self.subscription_handler.subscribe_data_change(self.server, variables)
         try:
@@ -2166,6 +2174,11 @@ class AnalogScalarSensorFunction(BaseSensorFunction):
                 _logger.debug(f"Initialized AlarmMonitor of {self.display_name}")
         except:
             pass
+    
+    @property 
+    def has_alarm_monitor(self) -> bool:
+        return self.alarm_active_state is not None
+    
     @property 
     def alarm_active(self) -> bool:
         if self.alarm_active_state is None:
