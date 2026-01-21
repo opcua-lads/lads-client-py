@@ -89,15 +89,37 @@ def call_function_state_machine_method(function: lads.BaseStateMachineFunction):
     if not key in st.session_state:
         st.session_state[key] = None
     method_name = st.session_state[key]
+    st.session_state[key] = None
+    if method_name is None:
+        return
+    if method_name.lower().startswith("startwithtarget"):
+        variable: lads.AnalogItem = function.target_value
+        if variable is not None:
+            value = to_float(variable.value)
+            st.toast(f"{function.display_name}.StartWitTargetValue({value})")
+            function.state_machine.start_with_target_value(value)
+            return
     function.state_machine.call_method_by_name(method_name)
     st.session_state[key] = None
 
 # MARK: call_state_machine_method
+@st.dialog("Provide target value", dismissible=True)
+def get_target_value(name: str):
+    st.session_state.target_value = None
+    msg = f"Provide target value for function" if name is None else f"Provide target value for function '{name}'"
+    st.write(msg)
+    value = st.text_input("Target value")
+    if st.button("Submit"):
+        st.session_state.target_value = value
+        st.rerun()
+
 def call_state_machine_method(state_machine: lads.StateMachine):
     key = state_machine.nodeid
     if not key in st.session_state:
         st.session_state[key] = None
-    method_name = st.session_state[key]
+    method_name: str = st.session_state[key]
+    if method_name is None:
+        return
     state_machine.call_method_by_name(method_name)
     st.session_state[key] = None
 
@@ -662,12 +684,14 @@ def update_state(container, functional_unit: lads.FunctionalUnit):
     with container:
         message = f":{state_color(current_state_var)}[**{current_state_str}**]"
         if str(current_state_var.value_str) == "Running":
-            active_program = functional_unit.program_manager.active_program
-            if active_program is not None:
-                if active_program.current_program_template is not None:
-                    message = message + f"  \nProgram template: {active_program.current_program_template.value_str}"
-                    if active_program.current_step_name is not None:
-                        message = message + f"  \nProgram step: {active_program.current_step_name.value_str}"
+            program_manager = functional_unit.program_manager
+            if program_manager is not None:
+                active_program = functional_unit.program_manager.active_program
+                if active_program is not None:
+                    if active_program.current_program_template is not None:
+                        message = message + f"  \nProgram template: {active_program.current_program_template.value_str}"
+                        if active_program.current_step_name is not None:
+                            message = message + f"  \nProgram step: {active_program.current_step_name.value_str}"
         st.markdown(message, help=current_state_var.dictionary_entries_as_markdown)
 
 # MARK: show_active_program
