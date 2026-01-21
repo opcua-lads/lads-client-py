@@ -119,6 +119,8 @@ class MachineryObjectIds(IntEnum):
 
 class DIObjectIds(IntEnum):
     """DI specific numerical node-ids"""
+    LockingServicesType = 6388
+    MaxInactiveLockTime = 6387
     DeviceHealthEnumeration = 6244
     LifetimeVariableType = 468
 
@@ -162,6 +164,7 @@ class LADSTypes:
         self.SetType = self.get_lads_node(LADSObjectIds.SetType)
         self.ComponentSetType = self.get_lads_node(LADSObjectIds.ComponentSetType)
         self.ComponentType = self.get_lads_node(LADSObjectIds.ComponentType)
+        self.LockingServicesType = self.get_di_node(DIObjectIds.LockingServicesType)
         self.FunctionalUnitSetType = self.get_lads_node(LADSObjectIds.FunctionalUnitSetType)
         self.FunctionalUnitType = self.get_lads_node(LADSObjectIds.FunctionalUnitType)
         self.FunctionSetType = self.get_lads_node(LADSObjectIds.FunctionSetType)
@@ -282,6 +285,12 @@ class Server(LADSTypes):
         product_uri = self.client.get_node(ua.ObjectIds.Server_ServerStatus_BuildInfo_ProductUri)
         self.name: str = await product_uri.read_value()
 
+        # locking services
+        self.max_inactive_lock_time = await BaseVariable.promote(self.get_di_node(DIObjectIds.MaxInactiveLockTime), self)
+        if self.max_inactive_lock_time is not None:
+            await self.max_inactive_lock_time.read_data_value()
+        
+        # devices
         device_set = await self.client.nodes.objects.get_child(f"{self.ns_DI}:DeviceSet")
         nodes = await device_set.get_children(refs = ua.ObjectIds.HasChild, nodeclassmask = ua.NodeClass.Object)
         for node in nodes:
@@ -295,6 +304,8 @@ class Server(LADSTypes):
                 return data_types
 
         self.initialized = True
+        
+
         return data_types
 
     async def evaluate(self):
@@ -708,15 +719,21 @@ class LADSNode(Node):
         child_objects = set(has_child_objects)
         child_objects.update(organizes_objects)
         return list(child_objects)
-    
-    async def call_lads_method(self, name: str, *args: Any) -> ua.StatusCode:
+
+    async def call_namespace_method(self, name: str, ns: int, *args: Any) -> ua.StatusCode:
         try:
             _logger.debug(f"Call method {name} with args {args}")
-            return await self.call_method(ua.QualifiedName(name, self.server.ns_LADS), *args)
+            return await self.call_method(ua.QualifiedName(name, ns), *args)
         except Exception as error:
             _logger.error(error)
             return ua.StatusCodes.BadNotImplemented
         
+    async def call_lads_method(self, name: str, *args: Any) -> ua.StatusCode:
+        return await self.call_namespace_method(name, self.server.ns_LADS, *args)
+    
+    async def call_di_method(self, name: str, *args: Any) -> ua.StatusCode:
+        return await self.call_namespace_method(name, self.server.ns_DI, *args)
+    
     if AFOSupport:
         @property
         def dictionary_entry_objects(self) -> list[DictionaryEntry]:
@@ -831,6 +848,8 @@ class BaseVariable(LADSNode):
             return super().display_name
 
     def set_value(self, value: Any) -> ua.StatusCode:
+        if value is None:
+            return ua.StatusCodes.BadNoValue
         if self.has_write_access:
             self.server.call_async_queue.put(self.write_value(value, self.data_type))
             return ua.StatusCodes.Uncertain
@@ -838,6 +857,8 @@ class BaseVariable(LADSNode):
             return ua.StatusCodes.BadNotWritable
 
     async def set_value_async(self, value: Any) -> ua.StatusCode:
+        if value is None:
+            return ua.StatusCodes.BadNoValue
         if self.has_write_access:
             result = ua.StatusCodes.Good
             try:
@@ -1449,18 +1470,21 @@ class Device(Component):
         functional_unit_set = await self.get_lads_child("FunctionalUnitSet")
         nodes = await self.get_child_objects(functional_unit_set)
         self.functional_units: list[FunctionalUnit] = await asyncio.gather(*(FunctionalUnit.promote(node, server) for node in nodes))
-        self.device_state, self.machinery_item_state, self.machinery_operation_mode = await asyncio.gather(
+        self.device_state, self.machinery_item_state, self.machinery_operation_mode, self.lock = await asyncio.gather(
             StateMachine.promote(await self.get_lads_child("DeviceState"), server),
             StateMachine.promote(await self.get_machinery_child("MachineryItemState"), server),
             StateMachine.promote(await self.get_machinery_child("MachineryOperationMode"), server),
+            Lock.promote(await self.get_di_child("Lock"), server)
         )
         state_machines: list[StateMachine] = remove_none([self.device_state, self.machinery_item_state, self.machinery_operation_mode])
         self.state_machine_variables = list(map(lambda state_machine: state_machine.current_state, state_machines))
         if self.device_health is not None:
             self.state_machine_variables.append(self.device_health)
 
+        # location
         self.hierarchical_location = self.variable_named("HierarchicalLocation")
         self.operational_location = self.variable_named("OperationalLocation")
+        
         if self.identification is not None:
             self.location = self.identification.location
         for location in self.location_variables:
@@ -1485,6 +1509,8 @@ class Device(Component):
             variables = variables + functional_unit.all_subscribed_variables
         if self.identification is not None:
             variables = variables + self.identification.subscribed_variables
+        if self.lock is not None:
+            variables = variables + self.lock.variables
         for component in self.components:
             variables = variables + component.subscribed_variables 
             if component.identification is not None:
@@ -1543,6 +1569,53 @@ class Device(Component):
         else:
             return []
 
+# MARK: Lock
+class Lock(LADSNode):
+    @classmethod
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(Lock, node, server.LockingServicesType, server)
+    
+    async def init(self, server: Server):
+        await super().init(server)
+        self.max_inactive_lock_time = server.max_inactive_lock_time
+        (self.locked, self.locking_client, self.locking_user, self.remaining_lock_time) = await asyncio.gather(
+            self.get_di_variable("Locked"),
+            self.get_di_variable("LockingClient"),
+            self.get_di_variable("LockingUser"),
+            self.get_di_variable("RemainingLockTime"),
+        )
+        parent = await LADSNode.promote(await self.get_parent(), server)
+        _logger.debug(f"Locking service of {parent.display_name} initialized")
+        
+    def init_lock(self, context:str = "LADS Cient"):
+        self.call_async(self.call_di_method("InitLock", context))
+        
+    def exit_lock(self):
+        self.call_async(self.call_di_method("ExitLock"))
+        
+    def break_lock(self):
+        self.call_async(self.call_di_method("BreakLock"))
+
+    def renew_lock(self):
+        self.call_async(self.call_di_method("RenewLock"))
+
+    def call_method_by_name(self, name: str, *args):
+        if name is None:
+            return
+        match name:
+            case "InitLock":
+                self.init_lock()
+            case "ExitLock":
+                self.exit_lock()
+            case "BreakLock":
+                self.break_lock()
+            case "RenewLock":
+                self.renew_lock()
+        
+    @property
+    def variables(self) ->list[BaseVariable]:
+        return remove_none([self.locked, self.locking_client, self.locking_user, self.remaining_lock_time])
+      
 # MARK: Function
 class Function(LADSNode):
     """
@@ -2040,10 +2113,11 @@ class FunctionalUnit(LADSNode):
         """
 
         await super().init(server)
-        self.function_set, self.functional_unit_state, self.program_manager = await asyncio.gather(
+        self.function_set, self.functional_unit_state, self.program_manager, self.lock = await asyncio.gather(
             FunctionSet.promote(await self.get_lads_child("FunctionSet"), server),
             FunctionalStateMachine.promote(await self.get_lads_child("FunctionalUnitState"), server),
             ProgramManager.promote(await self.get_lads_child("ProgramManager"), server),
+            Lock.promote(await self.get_di_child("Lock"), server)
         )
 
     async def finalize_init(self, device: Device):
@@ -2074,6 +2148,8 @@ class FunctionalUnit(LADSNode):
             variables = variables + child_vars
         if self.program_manager is not None:
             variables = variables + self.program_manager.variables
+        if self.lock is not None:
+            variables = variables + self.lock.variables
         return variables
 
     @property

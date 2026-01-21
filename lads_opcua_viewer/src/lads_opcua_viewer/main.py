@@ -694,6 +694,26 @@ def update_state(container, functional_unit: lads.FunctionalUnit):
                             message = message + f"  \nProgram step: {active_program.current_step_name.value_str}"
         st.markdown(message, help=current_state_var.dictionary_entries_as_markdown)
 
+# MARK: update_lock
+def show_lock_cmd(container_cmd, functional_unit: lads.FunctionalUnit):
+    lock = functional_unit.lock
+    if lock is None:
+        return
+    with container_cmd:
+        cmd = st.selectbox("Lock command", options=["InitLock", "ExitLock", "RenewLock", "BreakLock"], index=None, label_visibility="collapsed", placeholder="Choose a lock command")
+        lock.call_method_by_name(cmd)                
+    
+def update_lock_state(container_state, functional_unit: lads.FunctionalUnit):
+    lock = functional_unit.lock
+    if lock is None:
+        return
+    locked = lock.locked.value
+    with container_state:
+        if not locked:
+            st.markdown(f"🔓")
+        else:
+            st.markdown(f"🔐 Remaining {format_number(0.001 * lock.remaining_lock_time.value)}s  \r\n{lock.locking_client.value}")
+
 # MARK: show_active_program
 def show_active_program(container, functional_unit: lads.FunctionalUnit) -> any:
     current_state_var = functional_unit.current_state
@@ -879,8 +899,9 @@ def main():
     with st.expander(f"**{selected_functional_unit.at_name}**", expanded=True):
         state_machine = selected_functional_unit.functional_unit_state
         running_state_machine = state_machine.running_state_machine
-        columns = [2, 2, 3, 2] if running_state_machine is not None else [2, 0.1, 3, 2]
-        col_cmd, col_cmd_running, col_state, col_definition = st.columns(columns)
+        # columns = [2, 2, 1, 2, 1.5, 0.2] if running_state_machine is not None else [2, 0.1, 1, 2, 1.5, 0.2]
+        columns = [1, 1, 2, 1, 1.5, 0.2] if running_state_machine is not None else [1, 0.1, 2, 1, 1.5, 0.2]
+        col_cmd, col_cmd_running, col_state, col_lock_cmd, col_lock_state, col_definition = st.columns(columns)
         with col_cmd:
             # for the command select box extract methods without input arguments (except Start)
             methods = list(filter(lambda method: (len(method.input_arguments) == 0) | (method.display_name == "Start"), state_machine.methods))
@@ -904,10 +925,19 @@ def main():
                 running_state_machine.call_method_by_name(cmd)                
         with col_state:
             container_state = show_state(col_state, selected_functional_unit)
+
+        with col_lock_cmd:
+            container_lock_cmd = st.empty()
+        with col_lock_state:                    
+            container_lock_state = st.empty()                
+        show_lock_cmd(container_lock_cmd, selected_functional_unit)
+        update_lock_state(container_lock_state, selected_functional_unit)
+        
         with col_definition:
             definition = selected_functional_unit.dictionary_entries_as_markdown
             if len(definition) > 0:
-                st.markdown(":gray[Definitions]", help = definition)
+                # st.markdown(":gray[Definition]", help = definition)
+                st.markdown(" ", help = definition)
 
     # eventually create addtional tab for compliance documents
     document_set: lads.LADSSet = None
@@ -962,6 +992,7 @@ def main():
             index = 5
             while(True):
                 update_state(container_state, selected_functional_unit)
+                update_lock_state(container_lock_state, selected_functional_unit)
                 update_functions(function_containers)
                 update_events(container_events, selected_functional_unit)
                 update_active_program(progress_container, selected_functional_unit)
