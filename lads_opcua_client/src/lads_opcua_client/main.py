@@ -1571,6 +1571,12 @@ class Device(Component):
 
 # MARK: Lock
 class Lock(LADSNode):
+    INIT_LOCK = "InitLock"
+    EXIT_LOCK = "ExitLock"
+    BREAK_LOCK = "BreakLock"
+    RENEW_LOCK = "RenewLock"
+    COMMANDS = [INIT_LOCK, EXIT_LOCK, BREAK_LOCK, RENEW_LOCK]
+    
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(Lock, node, server.LockingServicesType, server)
@@ -1588,28 +1594,28 @@ class Lock(LADSNode):
         _logger.debug(f"Locking service of {parent.display_name} initialized")
         
     def init_lock(self, context:str = "LADS Cient"):
-        self.call_async(self.call_di_method("InitLock", context))
+        self.call_async(self.call_di_method(Lock.INIT_LOCK, context))
         
     def exit_lock(self):
-        self.call_async(self.call_di_method("ExitLock"))
+        self.call_async(self.call_di_method(Lock.EXIT_LOCK))
         
     def break_lock(self):
-        self.call_async(self.call_di_method("BreakLock"))
+        self.call_async(self.call_di_method(Lock.BREAK_LOCK))
 
     def renew_lock(self):
-        self.call_async(self.call_di_method("RenewLock"))
+        self.call_async(self.call_di_method(Lock.RENEW_LOCK))
 
     def call_method_by_name(self, name: str, *args):
         if name is None:
             return
         match name:
-            case "InitLock":
+            case Lock.INIT_LOCK:
                 self.init_lock()
-            case "ExitLock":
+            case Lock.EXIT_LOCK:
                 self.exit_lock()
-            case "BreakLock":
+            case Lock.BREAK_LOCK:
                 self.break_lock()
-            case "RenewLock":
+            case Lock.RENEW_LOCK:
                 self.renew_lock()
         
     @property

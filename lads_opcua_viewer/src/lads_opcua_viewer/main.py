@@ -700,7 +700,7 @@ def show_lock_cmd(container_cmd, functional_unit: lads.FunctionalUnit):
     if lock is None:
         return
     with container_cmd:
-        cmd = st.selectbox("Lock command", options=["InitLock", "ExitLock", "RenewLock", "BreakLock"], index=None, label_visibility="collapsed", placeholder="Choose a lock command")
+        cmd = st.selectbox("Lock command", options=lads.Lock.COMMANDS, index=None, label_visibility="collapsed", placeholder="Choose a lock command")
         lock.call_method_by_name(cmd)                
     
 def update_lock_state(container_state, functional_unit: lads.FunctionalUnit):
@@ -712,7 +712,7 @@ def update_lock_state(container_state, functional_unit: lads.FunctionalUnit):
         if not locked:
             st.markdown(f"🔓")
         else:
-            st.markdown(f"🔐 Remaining {format_number(0.001 * lock.remaining_lock_time.value)}s  \r\n{lock.locking_client.value}")
+            st.markdown(f"🔐 Remaining {format_number(0.001 * lock.remaining_lock_time.value)}s  \r\n{lock.locking_user.value}@{lock.locking_client.value}")
 
 # MARK: show_active_program
 def show_active_program(container, functional_unit: lads.FunctionalUnit) -> any:
