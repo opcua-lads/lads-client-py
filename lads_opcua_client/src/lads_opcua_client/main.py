@@ -156,6 +156,7 @@ class LADSTypes:
         self.TwoStateDiscreteType = self.get_node(ua.ObjectIds.TwoStateDiscreteType)
         self.MultiStateDiscreteType = self.get_node(ua.ObjectIds.MultiStateDiscreteType)
         self.EnumerationType = self.get_node(ua.ObjectIds.Enumeration)
+        self.ExclusiveLimitAlarmType = self.get_node(ua.ObjectIds.ExclusiveLimitAlarmType)
         self.LifetimeVariableType = self.get_di_node(DIObjectIds.LifetimeVariableType)
         self.MachineryItemIdentificationType = self.get_machinery_node(MachineryObjectIds.MachineryItemIdentificationType)
         self.MachineryOperationCounterType = self.get_machinery_node(MachineryObjectIds.MachineryOperationCounterType)
@@ -2192,6 +2193,40 @@ class FunctionalUnit(LADSNode):
         else:
             return []
 
+
+# MARK: AlarmMonitor
+class AlarmMonitor(LADSNode):
+    alarm_active_state: StateVariable = None
+    alarm_limit_state: StateVariable = None
+
+    @classmethod
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(AlarmMonitor, node, server.ExclusiveLimitAlarmType, server)
+
+    async def init(self, server: Server):
+        await super().init(server)        
+        self.alarm_active_state = await StateVariable.promote(await self.get_child("ActiveState"), server)
+        limit_state = await self.get_child("LimitState")
+        if limit_state is not None:
+            self.alarm_limit_state = await StateVariable.promote(await limit_state.get_child("CurrentState"), server)
+        
+    @property 
+    def alarm_active(self) -> bool:
+        if self.alarm_active_state is None:
+            return False
+        return self.alarm_active_state.value_str == "Active"
+    
+    @property 
+    def alarm_limit(self) -> str:
+        if (self.alarm_limit_state is None):
+            return ""
+        return self.alarm_limit_state.value_str
+        
+    @property
+    def variables(self) ->list[BaseVariable]:
+        return super().variables + remove_none([self.alarm_active_state, self.alarm_limit_state])
+    
+
 # MARK: BaseStateMachineFunction
 class BaseStateMachineFunction(Function):
     def __str__(self):
@@ -2227,6 +2262,7 @@ class StartStopControlFunction(BaseControlFunction):#
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(StartStopControlFunction, node, server.StartStopControlFunctionType, server)
 
+
 # MARK: BaseSensorFunction
 class BaseSensorFunction(Function):
     sensor_value = None
@@ -2240,8 +2276,7 @@ class BaseSensorFunction(Function):
 
 # MARK: AnalogScalarSensorFunction
 class AnalogScalarSensorFunction(BaseSensorFunction):
-    alarm_active_state: StateVariable = None
-    alarm_limit_state: StateVariable = None
+    alarm_monitor: AlarmMonitor = None
 
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -2250,38 +2285,27 @@ class AnalogScalarSensorFunction(BaseSensorFunction):
     async def init(self, server: Server):
         await super().init(server)        
         self.sensor_value = await get_lads_analog_item(self, "SensorValue")
-        try:
-            alarm_monitor = await self.get_lads_child("AlarmMonitor")
-            if alarm_monitor is not None:
-                self.alarm_active_state = await StateVariable.promote(await alarm_monitor.get_child("ActiveState"), server)
-                limit_state = await alarm_monitor.get_child("LimitState")
-                if limit_state is not None:
-                    self.alarm_limit_state = await StateVariable.promote(await limit_state.get_child("CurrentState"), server)
-                _logger.debug(f"Initialized AlarmMonitor of {self.display_name}")
-        except:
-            pass
+        self.alarm_monitor = await AlarmMonitor.promote(await self.get_lads_child("AlarmMonitor"), server)
     
     @property 
     def has_alarm_monitor(self) -> bool:
-        return self.alarm_active_state is not None
+        return self.alarm_monitor is not None
     
     @property 
     def alarm_active(self) -> bool:
-        if self.alarm_active_state is None:
-            return False
-        return self.alarm_active_state.value_str == "Active"
+        return False if self.alarm_monitor is None else self.alarm_monitor.alarm_active
     
     @property 
     def alarm_limit(self) -> str:
-        if (self.alarm_limit_state is None):
-            return ""
-        return self.alarm_limit_state.value_str
+        return "" if self.alarm_monitor is None else self.alarm_monitor.alarm_limit
         
     @property
     def variables(self) ->list[BaseVariable]:
-        return super().variables + remove_none([self.alarm_active_state, self.alarm_limit_state])
+        variables = super().variables
+        if self.alarm_monitor is not None:
+            variables = variables + self.alarm_monitor.variables
+        return variables
         
-
 # MARK: AnalogScalarSensorFunctionWithCompensation
 class AnalogScalarSensorFunctionWithCompensation(AnalogScalarSensorFunction):
     @classmethod
@@ -2332,15 +2356,39 @@ class BaseAnalogDiscreteControlFunction(BaseControlFunction):
     
 # MARK: AnalogControlFunction
 class AnalogControlFunction(BaseAnalogDiscreteControlFunction):
+    alarm_monitor: AlarmMonitor = None
+    
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(AnalogControlFunction, node, server.AnalogControlFunctionType, server)
 
     async def init(self, server: Server):
-        await super().init(server)        
-        self.current_value = await get_lads_analog_item(self, "CurrentValue")
-        self.target_value = await get_lads_analog_item(self, "TargetValue")
-
+        await super().init(server)
+        self.current_value, self.target_value, self.alarm_monitor =  await asyncio.gather(
+            get_lads_analog_item(self, "CurrentValue"),
+            get_lads_analog_item(self, "TargetValue"),
+            AlarmMonitor.promote(await self.get_lads_child("AlarmMonitor"), server)            
+        )
+    
+    @property 
+    def has_alarm_monitor(self) -> bool:
+        return self.alarm_monitor is not None
+    
+    @property 
+    def alarm_active(self) -> bool:
+        return False if self.alarm_monitor is None else self.alarm_monitor.alarm_active
+    
+    @property 
+    def alarm_limit(self) -> str:
+        return "" if self.alarm_monitor is None else self.alarm_monitor.alarm_limit
+        
+    @property
+    def variables(self) ->list[BaseVariable]:
+        variables = super().variables
+        if self.alarm_monitor is not None:
+            variables = variables + self.alarm_monitor.variables
+        return variables
+        
 # MARK: AnalogControlFunctionWithTotalizer
 class AnalogControlFunctionWithTotalizer(AnalogControlFunction):
     @classmethod
