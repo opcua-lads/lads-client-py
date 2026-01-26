@@ -2211,10 +2211,10 @@ class AlarmMonitor(LADSNode):
         await super().init(server)        
         self.alarm_active_state, self.high_high_limit, self.high_limit, self.low_limit, self.low_low_limit = await asyncio.gather(
             StateVariable.promote(await self.get_child("ActiveState"), server),
-            BaseVariable.promote(await self.get_child("HighHighLimit"), server),
-            BaseVariable.promote(await self.get_child("HighLimit"), server),
-            BaseVariable.promote(await self.get_child("LowLimit"), server),
-            BaseVariable.promote(await self.get_child("LowLowLimit"), server),
+            SubscribedVariable.promote(await self.get_child("HighHighLimit"), server),
+            SubscribedVariable.promote(await self.get_child("HighLimit"), server),
+            SubscribedVariable.promote(await self.get_child("LowLimit"), server),
+            SubscribedVariable.promote(await self.get_child("LowLowLimit"), server),
         )
         limit_state = await self.get_child("LimitState")
         if limit_state is not None:
