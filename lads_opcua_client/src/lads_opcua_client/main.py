@@ -2198,6 +2198,10 @@ class FunctionalUnit(LADSNode):
 class AlarmMonitor(LADSNode):
     alarm_active_state: StateVariable = None
     alarm_limit_state: StateVariable = None
+    high_high_limit: BaseVariable = None
+    high_limit: BaseVariable = None
+    low_limit: BaseVariable = None
+    low_low_limit: BaseVariable = None
 
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -2205,7 +2209,13 @@ class AlarmMonitor(LADSNode):
 
     async def init(self, server: Server):
         await super().init(server)        
-        self.alarm_active_state = await StateVariable.promote(await self.get_child("ActiveState"), server)
+        self.alarm_active_state, self.high_high_limit, self.high_limit, self.low_limit, self.low_low_limit = await asyncio.gather(
+            StateVariable.promote(await self.get_child("ActiveState"), server),
+            BaseVariable.promote(await self.get_child("HighHighLimit"), server),
+            BaseVariable.promote(await self.get_child("HighLimit"), server),
+            BaseVariable.promote(await self.get_child("LowLimit"), server),
+            BaseVariable.promote(await self.get_child("LowLowLimit"), server),
+        )
         limit_state = await self.get_child("LimitState")
         if limit_state is not None:
             self.alarm_limit_state = await StateVariable.promote(await limit_state.get_child("CurrentState"), server)
@@ -2224,7 +2234,10 @@ class AlarmMonitor(LADSNode):
         
     @property
     def variables(self) ->list[BaseVariable]:
-        return super().variables + remove_none([self.alarm_active_state, self.alarm_limit_state])
+        return super().variables + remove_none([
+            self.alarm_active_state, self.alarm_limit_state,
+            self.high_high_limit, self.high_limit, self.low_limit, self.low_low_limit
+        ])
     
 
 # MARK: BaseStateMachineFunction

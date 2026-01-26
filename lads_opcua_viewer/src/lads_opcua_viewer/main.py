@@ -198,7 +198,7 @@ def show_function_set(container, path: str, function_set: lads.FunctionSet, cont
                 show_function_set(container, s, function_set=function.function_set, container_dict=container_dict)
 
 # MARK: update_functions
-def get_alarm_indicator(function: lads.AnalogScalarSensorFunction | lads.AnalogControlFunction ) -> str:
+def get_alarm_indicator(function: lads.AnalogScalarSensorFunction | lads.AnalogControlFunction) -> str:
     alarm_indicator = ""
     if function.has_alarm_monitor:
         alarm_indicator = "🔹"
@@ -215,7 +215,26 @@ def get_alarm_indicator(function: lads.AnalogScalarSensorFunction | lads.AnalogC
                     alarm_indicator = "🔻🔻"
                 case _:
                     alarm_indicator = "⚠️"
-    return alarm_indicator    
+    return alarm_indicator
+
+def get_alarm_limits(function: lads.AnalogScalarSensorFunction | lads.AnalogControlFunction) -> str:
+    
+    def tryAppend(l: list, variable: lads.BaseVariable):
+        if variable is not None:
+            l.append(f"{variable.display_name} = {format_value(variable.value)}")
+            
+    alarm_monitor: lads.AlarmMonitor = function.alarm_monitor
+    if alarm_monitor is None:
+        return ""
+    l = []
+    tryAppend(l, alarm_monitor.high_high_limit)
+    tryAppend(l, alarm_monitor.high_limit)
+    tryAppend(l, alarm_monitor.low_limit)
+    tryAppend(l, alarm_monitor.low_low_limit)
+    if len(l) == 0:
+        return ""
+    l.insert(0, "**Alarm limits**")
+    return  "  \r\n".join(l)
     
 def update_functions(function_containers: dict):
     for function, containers in function_containers.items():
@@ -239,7 +258,8 @@ def update_functions(function_containers: dict):
                 if isinstance(function, lads.AnalogControlFunctionWithTotalizer):
                     st.markdown(":gray[Totalizer]")
             with pv_col: 
-                st.markdown(f":{variable_status_color(function.current_value)}[**{format_value(function.current_value.value)}** {function.current_value.eu} {get_alarm_indicator(function)}]", help=function.current_value.dictionary_entries_as_markdown)
+                help = "  \r\n".join([function.current_value.dictionary_entries_as_markdown, get_alarm_limits(function)])                
+                st.markdown(f":{variable_status_color(function.current_value)}[**{format_value(function.current_value.value)}** {function.current_value.eu} {get_alarm_indicator(function)}]", help=help)
                 if isinstance(function, lads.AnalogControlFunctionWithTotalizer):
                     st.markdown(f":blue[**{format_value(function.totalized_value.value)}** {function.totalized_value.eu}]", help=function.totalized_value.dictionary_entries_as_markdown)
         elif isinstance(function, lads.TwoStateDiscreteControlFunction) or isinstance(function, lads.MultiStateDiscreteControlFunction) :
@@ -255,7 +275,8 @@ def update_functions(function_containers: dict):
                     with sp_col:
                         st.markdown(f":gray[{format_value(function.compensation_value.value)} {function.compensation_value.eu}]", help=function.compensation_value.dictionary_entries_as_markdown)
             with pv_col:
-                st.markdown(f":{variable_status_color(function.sensor_value)}[**{format_value(function.sensor_value.value)}** {function.sensor_value.eu} {get_alarm_indicator(function)}]", help=function.sensor_value.dictionary_entries_as_markdown)
+                help = "  \r\n".join([function.sensor_value.dictionary_entries_as_markdown, get_alarm_limits(function)])
+                st.markdown(f":{variable_status_color(function.sensor_value)}[**{format_value(function.sensor_value.value)}** {function.sensor_value.eu} {get_alarm_indicator(function)}]", help=help)
 
         elif isinstance(function, lads.TwoStateDiscreteSensorFunction) or isinstance(function, lads.MultiStateDiscreteSensorFunction):
             with pv_col: 
