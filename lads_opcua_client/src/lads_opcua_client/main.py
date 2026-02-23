@@ -813,7 +813,7 @@ class BaseVariable(LADSNode):
         value: Any - the value of the variable
         value_str: str - the value of the variable as a string
     """
-
+    
     alternate_display_name: str = None
     subscription_level = SubscriptionLevel.Never
     data_value: ua.DataValue
@@ -840,6 +840,13 @@ class BaseVariable(LADSNode):
         if (historizing.Value.Value):
             self.subscription_level = SubscriptionLevel.Permanent
             self.history = pd.DataFrame({f"{self.display_name}": [self.value]}, index = [pd.to_datetime(self.data_value.SourceTimestamp)])
+
+    @property
+    def default_decimals(self) -> int:
+        if (self.data_type == ua.VariantType.Double) or (self.data_type == ua.VariantType.Float):
+            return 1
+        else:
+            return 0
 
     @property
     def display_name(self) -> str:
@@ -990,6 +997,7 @@ class StateVariable(SubscribedVariable):
         return s if len(l) < 2 else l[1]
 
 # MARK: AnalogItem
+from math import log10, trunc
 class AnalogItem(SubscribedVariable):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1002,6 +1010,7 @@ class AnalogItem(SubscribedVariable):
         await super().init(server)
         self.engineering_units: ua.EUInformation = None
         self.eu_range: ua.Range = None
+        self._default_decimals: int = None
         try:
             engineering_units = await self.get_child("EngineeringUnits")
             self.engineering_units: ua.EUInformation = await engineering_units.get_value()
@@ -1022,6 +1031,27 @@ class AnalogItem(SubscribedVariable):
                     return ""
                 return "%" if " or pct" in result else result
         return ""
+    
+    @property
+    def default_decimals(self) -> int:
+        if self._default_decimals is None:
+            self._default_decimals = self.decimals()
+            _logger.debug(f"{self.display_name} default_decimals = {self._default_decimals}")
+        return self._default_decimals
+    
+    def decimals(self, resolution = 1000, default = 1) -> int:
+        if self.eu_range is None:
+            return default
+        range = abs(self.eu_range.High - self.eu_range.Low)
+        if range >= resolution:
+            return default
+        try:
+            l = log10(resolution) - log10(range) + default
+            d = trunc(l)
+            return d
+        except(Exception):
+            _logger.debug(f"Unable to determine decimals of {self.display_name}: resolution={resolution}, range={range}")
+            return default
 
 # MARK: Enumeration
 class Enumeration(SubscribedVariable):

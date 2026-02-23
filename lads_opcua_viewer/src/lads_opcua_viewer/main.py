@@ -59,7 +59,7 @@ def format_value(x: float | list[float], decis = 1) -> str:
 def format_number(x: float, decis = 1) -> str:
     result = "NaN"
     try:
-        result = "{0:.1f}".format(x)
+        result = f"{{0:.{decis}f}}".format(x)
     finally:
         return result
 
@@ -254,14 +254,17 @@ def update_functions(function_containers: dict):
         elif isinstance(function, lads.AnalogControlFunction):
             color = function_state_color(function)
             with sp_col:
-                st.markdown(f":{color}[**{format_value(function.target_value.value)}** {function.target_value.eu}]", help=function.target_value.dictionary_entries_as_markdown)
+                variable = function.target_value
+                st.markdown(f":{color}[**{format_value(variable.value, variable.default_decimals)}** {variable.eu}]", help=variable.dictionary_entries_as_markdown)
                 if isinstance(function, lads.AnalogControlFunctionWithTotalizer):
                     st.markdown(":gray[Totalizer]")
             with pv_col: 
-                help = "  \r\n".join([function.current_value.dictionary_entries_as_markdown, get_alarm_limits(function)])                
-                st.markdown(f":{variable_status_color(function.current_value)}[**{format_value(function.current_value.value)}** {function.current_value.eu} {get_alarm_indicator(function)}]", help=help)
+                variable = function.current_value
+                help = "  \r\n".join([variable.dictionary_entries_as_markdown, get_alarm_limits(function)])                
+                st.markdown(f":{variable_status_color(variable)}[**{format_value(variable.value, variable.default_decimals)}** {variable.eu} {get_alarm_indicator(function)}]", help=help)
                 if isinstance(function, lads.AnalogControlFunctionWithTotalizer):
-                    st.markdown(f":blue[**{format_value(function.totalized_value.value)}** {function.totalized_value.eu}]", help=function.totalized_value.dictionary_entries_as_markdown)
+                    variable = function.totalized_value
+                    st.markdown(f":blue[**{format_value(variable.value, variable.default_decimals)}** {variable.eu}]", help=variable.dictionary_entries_as_markdown)
         elif isinstance(function, lads.TwoStateDiscreteControlFunction) or isinstance(function, lads.MultiStateDiscreteControlFunction) :
             color = function_state_color(function)
             with sp_col:
@@ -269,14 +272,15 @@ def update_functions(function_containers: dict):
             with pv_col: 
                 st.markdown(f":{variable_status_color(function.current_value)}[**{function.current_value.value_str}**]", help=function.current_value.dictionary_entries_as_markdown)
         elif isinstance(function, lads.AnalogScalarSensorFunction):
-            sensor_function: lads.AnalogScalarSensorFunction = function
             if isinstance(function, lads.AnalogScalarSensorFunctionWithCompensation):
                 if function.compensation_value is not None:
                     with sp_col:
-                        st.markdown(f":gray[{format_value(function.compensation_value.value)} {function.compensation_value.eu}]", help=function.compensation_value.dictionary_entries_as_markdown)
+                        variable = function.sensor_value
+                        st.markdown(f":gray[{format_value(variable.value, variable.default_decimals)} {variable.eu}]", help=variable.dictionary_entries_as_markdown)
             with pv_col:
-                help = "  \r\n".join([function.sensor_value.dictionary_entries_as_markdown, get_alarm_limits(function)])
-                st.markdown(f":{variable_status_color(function.sensor_value)}[**{format_value(function.sensor_value.value)}** {function.sensor_value.eu} {get_alarm_indicator(function)}]", help=help)
+                variable = function.sensor_value
+                help = "  \r\n".join([variable.dictionary_entries_as_markdown, get_alarm_limits(function)])
+                st.markdown(f":{variable_status_color(variable)}[**{format_value(variable.value, variable.default_decimals)}** {variable.eu} {get_alarm_indicator(function)}]", help=help)
 
         elif isinstance(function, lads.TwoStateDiscreteSensorFunction) or isinstance(function, lads.MultiStateDiscreteSensorFunction):
             with pv_col: 
@@ -290,9 +294,11 @@ def update_functions(function_containers: dict):
         elif isinstance(function, lads.MulitModeControlFunction):
             for controller_parameter in function.controller_parameters:
                 with sp_col:
-                    st.markdown(f":{function_state_color(function)}[**{format_value(controller_parameter.target_value.value)}** {controller_parameter.target_value.eu}]", help=controller_parameter.target_value.dictionary_entries_as_markdown)
+                    variable = controller_parameter.target_value
+                    st.markdown(f":{function_state_color(function)}[**{format_value(variable.value, variable.default_decimals)}** {variable.eu}]", help=variable.dictionary_entries_as_markdown)
                 with pv_col: 
-                    st.write(f":{variable_status_color(controller_parameter.current_value)}[**{format_value(controller_parameter.current_value.value)}** {controller_parameter.current_value.eu}]")
+                    variable = controller_parameter.current_value
+                    st.write(f":{variable_status_color(variable)}[**{format_value(variable.value, variable.default_decimals)}** {variable.eu}]")
 
 # MARK: add_chart_items
 def add_chart_items(functions: list[lads.Function], traces: list, arrays: list):
