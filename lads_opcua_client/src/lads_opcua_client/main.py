@@ -1042,15 +1042,19 @@ class AnalogItem(SubscribedVariable):
     def decimals(self, resolution = 1000, default = 1) -> int:
         if self.eu_range is None:
             return default
-        range = abs(self.eu_range.High - self.eu_range.Low)
+        try:
+            range = abs(self.eu_range.High - self.eu_range.Low)
+        except Exception:
+            _logger.debug(f"Unable to determine decimals of {self.display_name}-{self.nodeid}: EURange has no value")            
+            return default
         if range >= resolution:
             return default
         try:
             l = log10(resolution) - log10(range) + default
             d = trunc(l)
             return d
-        except(Exception):
-            _logger.debug(f"Unable to determine decimals of {self.display_name}: resolution={resolution}, range={range}")
+        except Exception:
+            _logger.debug(f"Unable to determine decimals of {self.display_name}-{self.nodeid}: resolution={resolution}, range={range}")
             return default
 
 # MARK: Enumeration
@@ -1436,6 +1440,8 @@ class Component(LADSNode):
         self.lifetime_counter_set = await LifetimeCounters.promote(await self.get_machinery_child("LifetimeCounters"), server)
         self.identification = await Identification.promote(await self.get_di_child("Identification"), server)
         self._variables = await get_properties_and_variables(self)
+        if self.operation_counters is not None:
+            self._variables = self._variables + self.operation_counters.variables
         self._variables.sort(key = lambda variable: variable.display_name)
         self.device_health = self.variable_named("DeviceHealth")
         if self.device_health is not None:
@@ -1550,8 +1556,12 @@ class Device(Component):
                 variables = variables + component.operation_counters.subscribed_variables
             for lifetime_counter in component.lifetime_counters:
                 variables = variables + lifetime_counter.subscribed_variables
+        if self.operation_counters is not None:
+            variables = variables + self.operation_counters.subscribed_variables
         self.subscription_handler = SubscriptionHandler()
-        data_change_handlers = await self.subscription_handler.subscribe_data_change(self.server, variables)
+        variable_set = set(variables)
+        _logger.debug(f"Device {self.display_name} subscribing to {len(variable_set)}/{len(variables)} variables")
+        data_change_handlers = await self.subscription_handler.subscribe_data_change(self.server, variable_set)
         try:
             events_handler = await self.subscription_handler.subscribe_events(self.server, self)
         except:
