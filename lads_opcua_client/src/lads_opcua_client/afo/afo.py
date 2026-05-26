@@ -90,7 +90,7 @@ def load_dictionary_csv(file_path: str) -> Dict[str, DictionaryEntry]:
 
 # MARK: Module Initialization
 try:
-    csv_path = files('lads_opcua_client.afo').joinpath('AFO_Dictionary-2025_03.csv')
+    csv_path = files('lads_opcua_client.afo').joinpath('AFO_Dictionary-2026_03.csv')
     _csv_file_path = str(csv_path)
 except Exception as e:
     print(f"Error locating dictionary CSV: {e}")

@@ -1755,7 +1755,7 @@ class FunctionSet(LADSSet):
         """
 
         await super().init(server)
-        self.functions: list[Function] = await asyncio.gather(*(self.promote_child(child) for child in self.children))
+        self.functions: list[Function] = remove_none(await asyncio.gather(*(self.promote_child(child) for child in self.children)))
         self.functions.sort(key = lambda function: function.display_name)
 
     async def finalize_init(self, functional_parent: LADSNode):

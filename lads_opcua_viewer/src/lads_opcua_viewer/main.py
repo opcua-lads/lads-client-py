@@ -379,8 +379,8 @@ def update_charts(container, functional_unit: lads.FunctionalUnit, use_plotly=Tr
             )
             with st.expander("**Chart**", expanded=(idx==0)):
                 unique_key = f"plotly_chart_{time.time_ns()}"
-                st.plotly_chart(fig, use_container_width=True, key=unique_key)
-                # st.plotly_chart(fig, width="stretch", key=unique_key)
+                #st.plotly_chart(fig, use_container_width=True, key=unique_key)
+                st.plotly_chart(fig, width="stretch", key=unique_key)
                 idx += 1
         else:
             for trace in traces:
@@ -449,7 +449,7 @@ def update_events(container, device: lads.Device):
             event_columns = events[["Time", "Severity", "SourceName", "Message"]]
             st.dataframe(
                 event_columns, 
-                #use_container_width=True, 
+                # use_container_width=True, 
                 width="stretch", 
                 hide_index=True,
                 column_config={
@@ -645,8 +645,8 @@ def update_asset_management(container_device, container_map, container_component
                 "size": size,
                 "color": color,
                 })
-            st.map(df, zoom=8, use_container_width=True)
-            # st.map(df, zoom=8, width="stretch")
+            # st.map(df, zoom=8, use_container_width=True)
+            st.map(df, zoom=8, width="stretch")
     with container_components.container():
         show_components(device, expanded_count=1)
 
