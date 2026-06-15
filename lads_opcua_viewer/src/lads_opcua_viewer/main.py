@@ -605,7 +605,7 @@ def show_asset_management(container, device: lads.Device):
     operation_mode_methods = [] if operation_mode_state_machine is None else operation_mode_state_machine.method_names
 
     with container.container():
-        col_device, col_map = st.columns([1, 2])
+        col_device, col_map, col_image = st.columns([1, 2, 0.5])
         with col_device:
             if len(device_state_methods) > 0:
                 device_method = st.selectbox(label="Device control", options=device_state_methods, index=None, key=device_state_machine.nodeid, on_change=call_state_machine_method(device_state_machine))
@@ -615,13 +615,15 @@ def show_asset_management(container, device: lads.Device):
             container_device = st.empty()
         with col_map:
             container_map = st.empty()
+        with col_image:
+            container_image = st.empty()
         container_components = st.empty()
 
-    update_asset_management(container_device, container_map, container_components, device)
-    return container_device, container_map, container_components
+    update_asset_management(container_device, container_map, container_image, container_components, device)
+    return container_device, container_map, container_image, container_components
 
 # MARK: update_asset_management
-def update_asset_management(container_device, container_map, container_components, device: lads.Device):
+def update_asset_management(container_device, container_map, container_image, container_components, device: lads.Device):
     with container_device:
         state_vars = device.state_machine_variables + device.location_variables
         with st.expander(f"**Status {device.display_name}**", expanded=True): 
@@ -647,6 +649,10 @@ def update_asset_management(container_device, container_map, container_component
                 })
             # st.map(df, zoom=8, use_container_width=True)
             st.map(df, zoom=8, width="stretch")
+    with container_image:
+        images = device.device_type_images
+        if len(images) > 0:
+            st.image(images)
     with container_components.container():
         show_components(device, expanded_count=1)
 
@@ -1004,7 +1010,7 @@ def main():
                 update_result_set(container_results, selected_functional_unit)
 
         with tab_device:
-            container_device, container_map, container_components = show_asset_management(empty(st.empty()), selected_functional_unit.device)
+            container_device, container_map, container_image, container_components = show_asset_management(empty(st.empty()), selected_functional_unit.device)
 
         if tab_documents is not None:
             with tab_documents:
@@ -1026,7 +1032,7 @@ def main():
                 update_functions(function_containers)
                 update_events(container_events, selected_functional_unit)
                 update_active_program(progress_container, selected_functional_unit)
-                update_asset_management(container_device, container_map, container_components, selected_functional_unit.device)
+                update_asset_management(container_device, container_map, container_image, container_components, selected_functional_unit.device)
                 index += 1
                 if index >= 5:
                     index = 0

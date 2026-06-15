@@ -797,6 +797,25 @@ class Method(LADSNode):
         _logger.debug(f"Method {self.display_name} inp {len(self.input_arguments)} out {len(self.output_arguments)}")
 
 # MARK: BaseVariable
+
+def format_duration(ms: float, ms_digits: int = 3) -> str:
+    if not 0 <= ms_digits <= 3:
+        raise ValueError("ms_digits must be between 0 and 3")
+
+    factor = 10 ** (3 - ms_digits)
+    total_ms = int(round(ms / factor) * factor)
+
+    hours, rem = divmod(total_ms, 3_600_000)
+    minutes, rem = divmod(rem, 60_000)
+    seconds, millis = divmod(rem, 1_000)
+
+    result = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+    if ms_digits:
+        fraction = millis // factor
+        result += f",{fraction:0{ms_digits}d}"
+
+    return result
 class BaseVariable(LADSNode):
     """"
     Represents a variable in the LADS OPC UA model.
@@ -894,7 +913,10 @@ class BaseVariable(LADSNode):
     @property
     def value_str(self) -> str:
         if self.data_value:
-            return variant_value_to_str(self.data_value.Value)
+            if (self.data_type == ua.VariantType.Double) and ("Duration" in self.display_name):
+                return format_duration(self.data_value.Value.Value, 0)
+            else:
+                return variant_value_to_str(self.data_value.Value)
         else:
             return ""
             
@@ -1500,6 +1522,7 @@ class Device(Component):
     hierarchical_location: SubscribedVariable = None
     operational_location: SubscribedVariable = None
     state_machine_variables: list[BaseVariable] = []
+    device_type_images = []
     compliance_document_set: LADSSet = None
 
     async def init(self, server: Server):
@@ -1526,6 +1549,14 @@ class Device(Component):
             self.location = self.identification.location
         for location in self.location_variables:
             location.subscription_level = SubscriptionLevel.Temporary
+            
+        # device type images
+        device_type_image = await self.get_di_child("DeviceTypeImage")
+        if device_type_image is not None:
+            nodes = await device_type_image.get_variables()
+            for node in nodes:
+                variable = await BaseVariable.promote(node, server)
+                self.device_type_images.append(variable.value)
         
         # compliance documents
         if server.ns_LADS_CD is not None:
@@ -1907,8 +1938,8 @@ class Result(LADSNode):
         self._variables.sort(key = lambda variable: variable.display_name)
         await self.update_sets()
         self.subscription_handler = SubscriptionHandler()
-        node_version_vars = [self.file_set.node_version, self.variable_set.node_version]
-        data_change_handlers = await self.subscription_handler.subscribe_data_change(self.server, [self.file_set.node_version, self.variable_set.node_version])        
+        node_version_vars = remove_none([self.file_set.node_version, self.variable_set.node_version])
+        data_change_handlers = await self.subscription_handler.subscribe_data_change(self.server, node_version_vars)        
 
     def update(self):
         self.call_async(self.update_async())
