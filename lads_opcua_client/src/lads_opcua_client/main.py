@@ -1515,18 +1515,10 @@ class Device(Component):
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(Device, node, server.DeviceType, server)
     
-    device_state: StateMachine
-    machinery_item_state: StateMachine
-    machinery_operation_mode: StateMachine
-    location: SubscribedVariable = None
-    hierarchical_location: SubscribedVariable = None
-    operational_location: SubscribedVariable = None
-    state_machine_variables: list[BaseVariable] = []
-    device_type_images = []
-    compliance_document_set: LADSSet = None
 
     async def init(self, server: Server):
         await super().init(server)
+                
         functional_unit_set = await self.get_lads_child("FunctionalUnitSet")
         nodes = await self.get_child_objects(functional_unit_set)
         self.functional_units: list[FunctionalUnit] = await asyncio.gather(*(FunctionalUnit.promote(node, server) for node in nodes))
@@ -1544,13 +1536,12 @@ class Device(Component):
         # location
         self.hierarchical_location = self.variable_named("HierarchicalLocation")
         self.operational_location = self.variable_named("OperationalLocation")
-        
-        if self.identification is not None:
-            self.location = self.identification.location
+        self.location = None if self.identification is None else self.identification.location
         for location in self.location_variables:
             location.subscription_level = SubscriptionLevel.Temporary
             
         # device type images
+        self.device_type_images = []
         device_type_image = await self.get_di_child("DeviceTypeImage")
         if device_type_image is not None:
             nodes = await device_type_image.get_variables()
