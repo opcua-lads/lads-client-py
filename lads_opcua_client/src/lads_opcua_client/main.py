@@ -771,11 +771,8 @@ class LADSNode(Node):
         else:
             return []
 
-    
-class Method(LADSNode):
-    input_arguments: list[Any]
-    output_arguments: list[Any]
-
+   
+class Method_Depriciated(LADSNode):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(Method, node, None, server)
@@ -791,6 +788,8 @@ class Method(LADSNode):
             return []
 
     async def init(self, server: Server):
+        self.input_arguments = []
+        self.output_arguments = []
         await super().init(server)
         self.input_arguments = await self.get_arguments("InputArguments")
         self.output_arguments = await self.get_arguments("OutputArguments")
@@ -816,6 +815,7 @@ def format_duration(ms: float, ms_digits: int = 3) -> str:
         result += f",{fraction:0{ms_digits}d}"
 
     return result
+
 class BaseVariable(LADSNode):
     """"
     Represents a variable in the LADS OPC UA model.
@@ -833,13 +833,6 @@ class BaseVariable(LADSNode):
         value_str: str - the value of the variable as a string
     """
     
-    alternate_display_name: str = None
-    subscription_level = SubscriptionLevel.Never
-    data_value: ua.DataValue
-    data_type: ua.VariantType
-    access_level: Set[ua.AccessLevel]
-    history: pd.DataFrame
-
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(BaseVariable, node, server.BaseVariableType, server)
@@ -848,14 +841,20 @@ class BaseVariable(LADSNode):
         return f"{super().__str__()} = {self.value}"
     
     async def init(self, server: Server):
+        self.alternate_display_name: str = None
+        self.subscription_level = SubscriptionLevel.Never
+        self.data_value: ua.DataValue = None
+        self.data_type: ua.VariantType = None
+        self. access_level: Set[ua.AccessLevel]
+        self.history: pd.DataFrame = None
         await super().init(server)
+        
         (self.data_value, self.data_type, self.access_level, historizing) = await asyncio.gather(
             self.read_data_value(raise_on_bad_status=False),
             self.read_data_type_as_variant_type(),
             self.get_access_level(),
             self.read_attribute(ua.AttributeIds.Historizing)
         )
-        self.history = None
         if (historizing.Value.Value):
             self.subscription_level = SubscriptionLevel.Permanent
             self.history = pd.DataFrame({f"{self.display_name}": [self.value]}, index = [pd.to_datetime(self.data_value.SourceTimestamp)])
@@ -932,9 +931,6 @@ class BaseVariable(LADSNode):
 
 # MARK: Method
 class Method(LADSNode):
-    input_arguments: list
-    output_arguments: list
-
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(Method, node, None, server)
@@ -991,10 +987,6 @@ class NodeVersionVariable(SubscribedVariable):
 
 # MARK: StateVariable
 class StateVariable(SubscribedVariable):
-    id: BaseVariable = None
-    effective_display_name: BaseVariable = None
-    alternate_display_name: str = None
-
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         variable: StateVariable = await promote_to(StateVariable, node, server.BaseVariableType, server)
@@ -1002,7 +994,11 @@ class StateVariable(SubscribedVariable):
         return await promote_to(StateVariable, node, server.BaseVariableType, server)
 
     async def init(self, server: Server):
+        self.id: BaseVariable = None
+        self.effective_display_name: BaseVariable = None
+        self.alternate_display_name: str = None
         await super().init(server)
+        
         variables = await self.get_children(nodeclassmask=ua.NodeClass.Variable)
         for variable in variables:
             browse_name = await variable.read_browse_name()
@@ -1081,8 +1077,6 @@ class AnalogItem(SubscribedVariable):
 
 # MARK: Enumeration
 class Enumeration(SubscribedVariable):
-    enum_strings: dict = {}
-
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(Enumeration, node, server.BaseVariableType, server)
@@ -1091,6 +1085,7 @@ class Enumeration(SubscribedVariable):
         return f"{super().__str__()}\n  EnumStrings: {self.enum_strings}"
     
     async def init(self, server: Server):
+        self.enum_strings: dict = {}
         await super().init(server)
         data_type_node_id = await self.read_data_type()
         data_type_node = Node(self.session, data_type_node_id)
@@ -1135,8 +1130,6 @@ class DiscreteVariable(SubscribedVariable):
 
 # MARK: TwoStateDiscrete
 class TwoStateDiscrete(DiscreteVariable):
-    true_state: BaseVariable
-    false_state: BaseVariable
 
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1146,6 +1139,8 @@ class TwoStateDiscrete(DiscreteVariable):
         return f"{super().__str__()}\n  TrueState: {self.true_state.value_str}\n  FalseState: {self.false_state.value_str}"
     
     async def init(self, server: Server):
+        self.true_state: BaseVariable = None
+        self.false_state: BaseVariable = None
         await super().init(server)
         self.true_state = await BaseVariable.promote(await self.get_child("TrueState"), server)
         self.false_state = await BaseVariable.promote(await self.get_child("FalseState"), server)
@@ -1192,9 +1187,6 @@ class MultiStateDiscrete(DiscreteVariable):
 
 # MARK: LifetimeCounter
 class LifetimeCounter(AnalogItem):
-    limit_value: BaseVariable
-    start_value: BaseVariable
-    warning_values: BaseVariable
 
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1204,6 +1196,9 @@ class LifetimeCounter(AnalogItem):
         return f"{super().__str__()}\n  {self.limit_value}\n  {self.start_value}"
 
     async def init(self, server: Server):
+        self.limit_value: BaseVariable = None
+        self.start_value: BaseVariable = None
+        self.warning_values: BaseVariable = None
         await super().init(server)
         self.limit_value, self.start_value, self.warning_values = await asyncio.gather(
             self.get_di_variable("LimitValue"),
@@ -1213,13 +1208,13 @@ class LifetimeCounter(AnalogItem):
 
 # MARK: StateMachine
 class StateMachine(LADSNode):
-    methods: list[Method] = []
-    methods_dict: dict[str, Method]
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(StateMachine, node, server.FiniteStateMachineType, server)
 
     async def init(self, server: Server):
+        self.methods: list[Method] = []
+        self.methods_dict: dict[str, Method] = {}
         await super().init(server)
         self.current_state = await StateVariable.promote(await self.get_child("CurrentState"), server)
         self.current_state.alternate_display_name = self.display_name
@@ -1315,12 +1310,12 @@ class LADSSet(LADSNode):
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(LADSSet, node, server.SetType, server)
     
-    node_version: NodeVersionVariable = None
-    children: list[Node] = []
-    child_class: Type
-    child_type: Node
-
     async def init(self, server: Server):
+        self.node_version: NodeVersionVariable = None
+        self.children: list[Node] = []
+        self.child_class: Type = None
+        self.child_type: Node = None
+
         await super().init(server)
         try:
             # node_version variable is optional
@@ -1381,15 +1376,15 @@ class ComponentSet(LADSSet):
 
 # MARK: OperationCounters
 class OperationCounters(LADSNode):
-    operation_cycle_counter: BaseVariable
-    operation_duration: BaseVariable
-    power_on_duration: BaseVariable
 
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(OperationCounters, node, server.MachineryOperationCounterType, server)
     
     async def init(self, server: Server):
+        self.operation_cycle_counter: BaseVariable = None
+        self.operation_duration: BaseVariable = None
+        self.power_on_duration: BaseVariable = None
         await super().init(server)
         self.operation_cycle_counter, self.operation_duration, self.power_on_duration = await asyncio.gather(
             self.get_di_variable("OperationCycleCounter"),
@@ -1421,15 +1416,16 @@ class LifetimeCounters(LADSNode):
 
 # MARK: Identification
 class Identification(LADSNode):
-    asset_id: BaseVariable
-    component_name: BaseVariable
-    location: BaseVariable
 
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(Identification, node, server.MachineryItemIdentificationType, server)
     
     async def init(self, server: Server):
+        self.asset_id: BaseVariable = None
+        self.component_name: BaseVariable = None
+        self.location: BaseVariable = None
+
         await super().init(server)
         self._variables = await get_properties_and_variables(self)
         self._variables.sort(key = lambda variable: variable.display_name)
@@ -1446,18 +1442,19 @@ class Identification(LADSNode):
 
 # MARK: Component
 class Component(LADSNode):
-    component_set: LADSSet = None
-    device_health: Enumeration = None
-    operation_counters: OperationCounters
-    lifetime_counter_set: LifetimeCounters
-    identification: Identification = None
 
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(Component, node, server.ComponentType, server)
     
     async def init(self, server: Server):
+        self.component_set: LADSSet = None
+        self.device_health: Enumeration = None
+        self.operation_counters: OperationCounters = None
+        self.lifetime_counter_set: LifetimeCounters = None
+        self.identification: Identification = None
         await super().init(server)
+        
         self.operation_counters = await OperationCounters.promote(await self.get_di_child("OperationCounters"), server)
         self.lifetime_counter_set = await LifetimeCounters.promote(await self.get_machinery_child("LifetimeCounters"), server)
         self.identification = await Identification.promote(await self.get_di_child("Identification"), server)
@@ -1515,9 +1512,17 @@ class Device(Component):
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(Device, node, server.DeviceType, server)
     
-
     async def init(self, server: Server):
-        await super().init(server)
+        self.device_state: StateMachine = None
+        self.machinery_item_state: StateMachine = None
+        self.machinery_operation_mode: StateMachine = None
+        self.location: SubscribedVariable = None
+        self.hierarchical_location: SubscribedVariable = None
+        self.operational_location: SubscribedVariable = None
+        self.state_machine_variables: list[BaseVariable] = []
+        self.device_type_images = []
+        self.compliance_document_set: LADSSet = None
+        await super().init(server)            
                 
         functional_unit_set = await self.get_lads_child("FunctionalUnitSet")
         nodes = await self.get_child_objects(functional_unit_set)
@@ -1698,7 +1703,6 @@ class Function(LADSNode):
         all_variables: list[BaseVariable] - List of all variables.
     """
 
-    functional_parent: LADSNode = None
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(Function, node, server.FunctionType, server)
@@ -1711,7 +1715,9 @@ class Function(LADSNode):
             server: Server - The server.
         """
 
+        self.functional_parent: LADSNode = None
         await super().init(server)
+        
         node = await self.get_lads_child("IsEnabled")
         self.is_enabled = await BaseVariable.promote(node, server)
         self.function_set: FunctionSet = await self.get_lads_child("FunctionSet")
@@ -1877,21 +1883,20 @@ class VariableSet(LADSSet):
 # MARK: ResultFile
 from asyncua.client.ua_file import UaFile
 class ResultFile(LADSNode):
-    mime_type: BaseVariable
-    name: BaseVariable
-    file: LADSNode
-    data: Any
-
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(ResultFile, node, server.ResultFileType, server)
     
     async def init(self, server: Server):
+        self.mime_type: BaseVariable = None
+        self.name: BaseVariable = None
+        self.file: LADSNode = None
+        self.data: Any = None
         await super().init(server)
+        
         self.mime_type = await self.get_lads_variable("MimeType")
         self.name = await self.get_lads_variable("Name")
         self.file = await self.get_lads_child("File")
-        self.data = None
 
     async def download(self):
         try:
@@ -1915,16 +1920,16 @@ class ResultFile(LADSNode):
 
 # MARK: Result
 class Result(LADSNode):
-    file_set: LADSSet
-    variable_set: VariableSet
-    subscription_handler: SubscriptionHandler
-
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(Result, node, server.ResultType, server)
 
     async def init(self, server: Server):
+        self.file_set: LADSSet = None
+        self.variable_set: VariableSet = None
+        self.subscription_handler: SubscriptionHandler = None
         await super().init(server)
+        
         self._variables = remove_none(await get_properties_and_variables(self))
         self._variables.sort(key = lambda variable: variable.display_name)
         await self.update_sets()
@@ -1954,18 +1959,6 @@ class Result(LADSNode):
     
 # MARK: ActiveProgram
 class ActiveProgram(LADSNode):
-    current_program_template: BaseVariable
-    current_runtime: BaseVariable
-    current_pause_time: BaseVariable
-    current_step_name: BaseVariable
-    curent_step_number: BaseVariable
-    current_step_runtime: BaseVariable
-    estimated_runtime: BaseVariable
-    estimated_step_numbers: BaseVariable
-    estimated_step_runtime: BaseVariable
-    device_program_run_id: BaseVariable
-    _variables: list[BaseVariable]
-
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(ActiveProgram, node, server.ActiveProgramType, server)
@@ -1977,6 +1970,18 @@ class ActiveProgram(LADSNode):
         return None if len(match) == 0 else match[0]
 
     async def init(self, server: Server):
+        self.current_program_template: BaseVariable
+        self.current_runtime: BaseVariable
+        self.current_pause_time: BaseVariable
+        self.current_step_name: BaseVariable
+        self.curent_step_number: BaseVariable
+        self.current_step_runtime: BaseVariable
+        self.estimated_runtime: BaseVariable
+        self.estimated_step_numbers: BaseVariable
+        self.estimated_step_runtime: BaseVariable
+        self.device_program_run_id: BaseVariable
+        self._variables: list[BaseVariable]
+
         await super().init(server)
         self._variables = await get_properties_and_variables(self)
         self._variables.sort(key = lambda variable: variable.display_name)
@@ -2036,16 +2041,16 @@ class ActiveProgram(LADSNode):
 
 # MARK: ProgramManager
 class ProgramManager(LADSNode):
-    program_template_set: LADSSet
-    result_set: LADSSet
-    active_program: ActiveProgram
-
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(ProgramManager, node, server.ProgramManagerType, server)
 
     async def init(self, server: Server):
+        self.program_template_set: LADSSet = None
+        self.result_set: LADSSet = None
+        self.active_program: ActiveProgram = None
         await super().init(server)
+        
         self.program_template_set = await LADSSet.promote(await self.get_lads_child("ProgramTemplateSet"), server)
         self.result_set = await LADSSet.promote(await self.get_lads_child("ResultSet"), server)
         await self.program_template_set.promote_children(ProgramTemplate, server.ProgramTemplateType, server.ProgramTemplateSetType)
@@ -2077,26 +2082,28 @@ class ComplianceDocumentSet(LADSSet):
 
 # MARK: ComplianceDocument
 class ComplianceDocument(LADSNode):
-    document_name: BaseVariable
-    issued_at: BaseVariable
-    valid_from: BaseVariable
-    valid_until: BaseVariable
-    mime_type: BaseVariable
-    schema_uri: BaseVariable
-    content: BaseVariable
-    file: LADSNode
-    data: Any
-    downloading: bool = False
-    applies_to: list[LADSNode]
-    references_markdown: list[str]
-    subscription_handler: SubscriptionHandler
-
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(Result, node, server.ComplianceDocumentType, server)
 
     async def init(self, server: Server):
+        """
+        self.document_name: BaseVariable
+        self.issued_at: BaseVariable
+        self.valid_from: BaseVariable
+        self.valid_until: BaseVariable
+        self.mime_type: BaseVariable
+        self.schema_uri: BaseVariable
+        self.content: BaseVariable
+        self.file: LADSNode
+        self.data: Any = None
+        self.downloading: bool = False
+        self.applies_to: list[LADSNode] = []
+        self.references_markdown: list[str] = []
+        self.subscription_handler: SubscriptionHandler
+        """
         await super().init(server)
+        
         self.document_name = await self.get_lads_cd_variable("DocumentName")
         self.issued_at = await self.get_lads_cd_variable("IssuedAt")
         self.valid_from = await self.get_lads_cd_variable("ValidFrom")
@@ -2105,11 +2112,8 @@ class ComplianceDocument(LADSNode):
         self.content = await self.get_lads_cd_variable("Content")
         self.schema_uri = await self.get_lads_cd_variable("SchemaUri")
         self.file = await self.get_lads_cd_child("File")
-        self.data = None
         ref_type: ua.ReferenceDescription = server.HasComplianceDocument
         references = await self.get_references_of_type(ref_type)
-        self.applies_to = []
-        self.references_markdown = []
         for desc in references:
             node = server.get_node(desc.NodeId)
             type_node_id = await node.read_type_definition()
@@ -2169,10 +2173,6 @@ class FunctionalUnit(LADSNode):
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(FunctionalUnit, node, server.FunctionalUnitType, server)
     
-    functional_unit_state: FunctionalStateMachine
-    function_set: FunctionSet
-    program_manager: ProgramManager
-
     async def init(self, server: Server):
         """
         Initializes the functional unit.
@@ -2180,8 +2180,11 @@ class FunctionalUnit(LADSNode):
         Args:
             server: Server - The server.
         """
-
+        self.functional_unit_state: FunctionalStateMachine = None
+        self.function_set: FunctionSet = None
+        self.program_manager: ProgramManager = None
         await super().init(server)
+        
         self.function_set, self.functional_unit_state, self.program_manager, self.lock = await asyncio.gather(
             FunctionSet.promote(await self.get_lads_child("FunctionSet"), server),
             FunctionalStateMachine.promote(await self.get_lads_child("FunctionalUnitState"), server),
@@ -2258,19 +2261,21 @@ class FunctionalUnit(LADSNode):
 
 # MARK: AlarmMonitor
 class AlarmMonitor(LADSNode):
-    alarm_active_state: StateVariable = None
-    alarm_limit_state: StateVariable = None
-    high_high_limit: BaseVariable = None
-    high_limit: BaseVariable = None
-    low_limit: BaseVariable = None
-    low_low_limit: BaseVariable = None
-
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(AlarmMonitor, node, server.ExclusiveLimitAlarmType, server)
 
     async def init(self, server: Server):
+        """
+        self.alarm_active_state: StateVariable = None
+        self.alarm_limit_state: StateVariable = None
+        self.high_high_limit: BaseVariable = None
+        self.high_limit: BaseVariable = None
+        self.low_limit: BaseVariable = None
+        self.low_low_limit: BaseVariable = None
+        """
         await super().init(server)        
+        
         self.alarm_active_state, self.high_high_limit, self.high_limit, self.low_limit, self.low_low_limit = await asyncio.gather(
             StateVariable.promote(await self.get_child("ActiveState"), server),
             SubscribedVariable.promote(await self.get_child("HighHighLimit"), server),
@@ -2321,9 +2326,9 @@ class BaseStateMachineFunction(Function):
 
 # MARK: BaseControlFunction
 class BaseControlFunction(BaseStateMachineFunction):
-    control_function_state: FunctionalStateMachine = None
 
     async def init(self, server: Server):
+        self.control_function_state: FunctionalStateMachine = None
         await super().init(server)
         self.control_function_state = await FunctionalStateMachine.promote(await self.get_lads_child("ControlFunctionState"), server)
 
@@ -2337,27 +2342,29 @@ class StartStopControlFunction(BaseControlFunction):#
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(StartStopControlFunction, node, server.StartStopControlFunctionType, server)
 
-
 # MARK: BaseSensorFunction
 class BaseSensorFunction(Function):
-    sensor_value = None
 
     def __str__(self):
         return f"{super().__str__()}\n  {self.sensor_value}"
     
+    async def init(self, server: Server):
+        self.sensor_value = None
+        await super().init(server)
+        
     @property
     def variables(self) ->list[BaseVariable]:
         return super().variables + [self.sensor_value]
 
 # MARK: AnalogScalarSensorFunction
 class AnalogScalarSensorFunction(BaseSensorFunction):
-    alarm_monitor: AlarmMonitor = None
 
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(AnalogScalarSensorFunction, node, server.AnalogScalarSensorFunctionType, server)
 
     async def init(self, server: Server):
+        self.alarm_monitor: AlarmMonitor = None
         await super().init(server)        
         self.sensor_value = await get_lads_analog_item(self, "SensorValue")
         self.alarm_monitor = await AlarmMonitor.promote(await self.get_lads_child("AlarmMonitor"), server)
@@ -2431,13 +2438,13 @@ class BaseAnalogDiscreteControlFunction(BaseControlFunction):
     
 # MARK: AnalogControlFunction
 class AnalogControlFunction(BaseAnalogDiscreteControlFunction):
-    alarm_monitor: AlarmMonitor = None
     
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(AnalogControlFunction, node, server.AnalogControlFunctionType, server)
 
     async def init(self, server: Server):
+        self.alarm_monitor: AlarmMonitor = None
         await super().init(server)
         self.current_value, self.target_value, self.alarm_monitor =  await asyncio.gather(
             get_lads_analog_item(self, "CurrentValue"),
@@ -2500,8 +2507,10 @@ class TimerControlFunction(AnalogControlFunction):
     
 # MARK: DiscreteControlFunction
 class DiscreteControlFunction(BaseAnalogDiscreteControlFunction):
+    """
     target_value: DiscreteVariable
     current_value: DiscreteVariable
+    """
 
 # MARK: TwoStateDiscreteControlFunction
 class TwoStateDiscreteControlFunction(DiscreteControlFunction):
@@ -2560,7 +2569,6 @@ class ControllerParameterSet(LADSSet):
         except:
             return None
             
-
 class MulitModeControlFunction(BaseControlFunction):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -2617,13 +2625,13 @@ class MulitModeControlFunction(BaseControlFunction):
     
 # MARK: CoverFunction
 class CoverFunction(BaseStateMachineFunction):
-    cover_state: StateMachine = None
 
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
         return await promote_to(CoverFunction, node, server.CoverFunctionType, server)
 
     async def init(self, server: Server):
+        # self.cover_state: StateMachine = None
         await super().init(server)
         self.cover_state = await FunctionalStateMachine.promote(await self.get_lads_child("CoverState"), server)
 
@@ -2771,7 +2779,6 @@ class Connection:
             #except Exception as error:
                 # _logger.error(error)
                 
-
 def get_value(data: dict, key: str) -> any:
     if key in data:
         return data[key]
