@@ -821,8 +821,9 @@ class BaseVariable(LADSNode):
         self.subscription_level = SubscriptionLevel.Never
 
         await super().init(server)        
-        (self.data_value, self.data_type, self.access_level, historizing) = await asyncio.gather(
+        (self.data_value, self.data_type, self.variant_type, self.access_level, historizing) = await asyncio.gather(
             self.read_data_value(raise_on_bad_status=False),
+            self.read_data_type(),
             self.read_data_type_as_variant_type(),
             self.get_access_level(),
             self.read_attribute(ua.AttributeIds.Historizing)
@@ -833,7 +834,7 @@ class BaseVariable(LADSNode):
 
     @property
     def default_decimals(self) -> int:
-        if (self.data_type == ua.VariantType.Double) or (self.data_type == ua.VariantType.Float):
+        if (self.variant_type == ua.VariantType.Double) or (self.variant_type == ua.VariantType.Float):
             return 1
         else:
             return 0
@@ -849,7 +850,7 @@ class BaseVariable(LADSNode):
         if value is None:
             return ua.StatusCodes.BadNoValue
         if self.has_write_access:
-            self.server.call_async_queue.put(self.write_value(value, self.data_type))
+            self.server.call_async_queue.put(self.write_value(value, self.variant_type))
             return ua.StatusCodes.Uncertain
         else:
             return ua.StatusCodes.BadNotWritable
@@ -860,7 +861,7 @@ class BaseVariable(LADSNode):
         if self.has_write_access:
             result = ua.StatusCodes.Good
             try:
-                await self.write_value(value, self.data_type)
+                await self.write_value(value, self.variant_type)
             except:
                 result = ua.StatusCodes.BadInvalidArgument
             return result
@@ -884,7 +885,8 @@ class BaseVariable(LADSNode):
     @property
     def value_str(self) -> str:
         if self.data_value:
-            if (self.data_type == ua.VariantType.Double) and ("Duration" in self.display_name):
+            # check for duration datatype
+            if self.data_type == ua.NodeId(290):
                 return format_duration(self.data_value.Value.Value, 0)
             else:
                 return variant_value_to_str(self.data_value.Value)
