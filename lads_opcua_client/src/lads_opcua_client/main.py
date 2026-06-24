@@ -372,10 +372,11 @@ def variant_value_to_str(variant: ua.Variant) -> str:
         else:
             return s
 
-def format_duration(ms: float, ms_digits: int = 3) -> str:
+def duration_to_str(ms: float, ms_digits: int = 3) -> str:
+    if ms is None:
+        return ""
     if not 0 <= ms_digits <= 3:
         raise ValueError("ms_digits must be between 0 and 3")
-
     factor = 10 ** (3 - ms_digits)
     total_ms = int(round(ms / factor) * factor)
 
@@ -887,7 +888,7 @@ class BaseVariable(LADSNode):
         if self.data_value:
             # check for duration datatype
             if self.data_type == ua.NodeId(290):
-                return format_duration(self.data_value.Value.Value, 0)
+                return duration_to_str(self.data_value.Value.Value, 0)
             else:
                 return variant_value_to_str(self.data_value.Value)
         else:
@@ -1224,6 +1225,15 @@ class StateMachine(LADSNode):
         return super().variables + remove_none([self.current_state, self.current_state.effective_display_name])
 
 # MARK: FunctionalStateMachine
+import re
+program_template_pattern = re.compile(r'^(.*?)(?:\s+\((.*)\))?$')
+def extract_program_template_name(name: str) -> str:
+    match = program_template_pattern.fullmatch(name)
+    if not match:
+        return None
+    item1, item2 = match.groups()
+    return item2 or item1
+
 class FunctionalStateMachine(StateMachine):
     @classmethod
     async def promote(cls, node: Node, server: Server) -> Self:
@@ -1238,6 +1248,7 @@ class FunctionalStateMachine(StateMachine):
                 
     def buildProperties(self, properties: pd.DataFrame) -> list:
         key_value_list = None
+        # key_value_list = []
         for index, row in properties.iterrows():
             key = str(row["Key"])
             value =str(row["Value"])
@@ -1251,8 +1262,10 @@ class FunctionalStateMachine(StateMachine):
         return key_value_list
 
     def start_program(self, program_template: str, properties: pd.DataFrame, supervisory_job_id: str, supervisory_task_id: str, samples: pd.DataFrame):
+        program_template_name = extract_program_template_name(program_template)
         key_value_list = self.buildProperties(properties)
         sample_info_list = None
+        # sample_info_list = []
         for index, row in samples.iterrows():
             sample_info = self.server.SampleInfoType(
                 str(row["ContainerId"]),
@@ -1264,7 +1277,7 @@ class FunctionalStateMachine(StateMachine):
                 sample_info_list = []
             sample_info_list.append(sample_info)
         self.call_async(self.call_lads_method("StartProgram", 
-                                              program_template, 
+                                              program_template_name, 
                                               key_value_list, 
                                               supervisory_job_id, 
                                               supervisory_task_id, 
@@ -1815,6 +1828,12 @@ class ProgramTemplate(LADSNode):
         self._variables.sort(key = lambda variable: variable.display_name)
 
     @property
+    def unique_name(self) -> str:
+        display_name = self.display_name
+        browse_name = self.browse_name.Name
+        return display_name if display_name == browse_name else f"{display_name} ({browse_name})"
+
+    @property
     def variables(self) ->list[BaseVariable]:
         return self._variables
 
@@ -2036,7 +2055,7 @@ class ProgramManager(LADSNode):
 
     @property
     def program_template_names(self) -> list[str]:
-        return list(map(lambda template: template.display_name, self.program_templates))
+        return list(map(lambda template: template.unique_name, self.program_templates))
     
     @property
     def results(self) -> list[Result]:

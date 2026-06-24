@@ -701,7 +701,7 @@ def show_program_template_set(container, functional_unit: lads.FunctionalUnit):
         if program_manager is None: 
             return
         for program_template in program_manager.program_templates:
-            with st.expander(program_template.display_name, expanded=False):
+            with st.expander(program_template.unique_name, expanded=False):
                 definitions = program_template.dictionary_entries_as_markdown
                 if len(definitions) > 0:
                     st.markdown(":gray[Definitions]", help=program_template.dictionary_entries_as_markdown)
