@@ -1534,7 +1534,10 @@ class Device(Component):
             nodes = await device_type_image.get_variables()
             for node in nodes:
                 variable = await BaseVariable.promote(node, server)
-                self.device_type_images.append(variable.value)
+                value = variable.value
+                from sys import getsizeof
+                if value != None and getsizeof(value) > 0:
+                    self.device_type_images.append(value)
         
         # compliance documents
         if server.ns_LADS_CD is not None:
