@@ -705,6 +705,12 @@ class LADSNode(Node):
     async def get_di_variable(self, name : str) -> BaseVariable:
         return await BaseVariable.promote(await self.get_di_child(name), self.server)
     
+    async def get_amb_child(self, name : str) -> Node:
+        return await self.get_child_or_none(ua.QualifiedName(name, self.server.ns_AMB))
+    
+    async def get_amb_variable(self, name : str) -> BaseVariable:
+        return await BaseVariable.promote(await self.get_amb_child(name), self.server)
+    
     async def get_machinery_child(self, name : str) -> Node:
         return await self.get_child_or_none(ua.QualifiedName(name, self.server.ns_Machinery))
     
@@ -1521,8 +1527,10 @@ class Device(Component):
             self.state_machine_variables.append(self.device_health)
 
         # location
-        self.hierarchical_location = self.variable_named("HierarchicalLocation")
-        self.operational_location = self.variable_named("OperationalLocation")
+        self.hierarchical_location, self.operational_location = await asyncio.gather(
+            self.get_amb_variable("HierarchicalLocation"),
+            self.get_amb_variable("OperationalLocation"),
+        )
         self.location = None if self.identification is None else self.identification.location
         for location in self.location_variables:
             location.subscription_level = SubscriptionLevel.Temporary
@@ -1553,7 +1561,7 @@ class Device(Component):
         await super().finalize_init()
         await asyncio.gather(*(functional_unit.finalize_init(self) for functional_unit in self.functional_units))
         # prepare subscriptions
-        variables = self.subscribed_variables
+        variables = self.subscribed_variables + self.location_variables
         for functional_unit in self.functional_units:
             variables = variables + functional_unit.all_subscribed_variables
         if self.identification is not None:
@@ -2029,7 +2037,6 @@ class ActiveProgram(LADSNode):
         except:
             return 0.0
     
-
 # MARK: ProgramManager
 class ProgramManager(LADSNode):
     @classmethod

@@ -611,7 +611,18 @@ def show_asset_management(container, device: lads.Device):
                 device_method = st.selectbox(label="Device control", options=device_state_methods, index=None, key=device_state_machine.nodeid, on_change=call_state_machine_method(device_state_machine))
             if len(operation_mode_methods) > 0:
                 operation_mode_method = st.selectbox(label="Operation mode", options=operation_mode_methods, index=None, key=operation_mode_state_machine.nodeid, on_change=call_state_machine_method(operation_mode_state_machine))
-            state_vars = device.state_machine_variables + device.location_variables
+            location_variables = device.location_variables
+            if len(location_variables) > 0:
+                with st.form("Locations", clear_on_submit=True):
+                    input_values = {}
+                    for variable in location_variables:
+                        name = variable.display_name
+                        value = variable.value_str
+                        input_values[variable] = st.text_input(label=f"{name}: {value}", value=value, key=variable.nodeid, help=variable.description.Text)
+                    if st.form_submit_button("Update Locations"):
+                        for variable, value in input_values.items():
+                            if value != variable.value_str:
+                                variable.set_value(value    )
             container_device = st.empty()
         with col_map:
             container_map = st.empty()
@@ -625,7 +636,7 @@ def show_asset_management(container, device: lads.Device):
 # MARK: update_asset_management
 def update_asset_management(container_device, container_map, container_image, container_components, device: lads.Device):
     with container_device:
-        state_vars = device.state_machine_variables + device.location_variables
+        state_vars = device.state_machine_variables
         with st.expander(f"**Status {device.display_name}**", expanded=True): 
             show_variables_table(state_vars)
     with container_map:
