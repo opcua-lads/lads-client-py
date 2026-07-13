@@ -663,7 +663,10 @@ def update_asset_management(container_device, container_map, container_image, co
     with container_image:
         images = device.device_type_images
         if len(images) > 0:
-            st.image(images)
+            try:
+                st.image(images)
+            except:
+                print("Error showing device image")
     with container_components.container():
         show_components(device, expanded_count=1)
 
