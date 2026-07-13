@@ -1006,6 +1006,7 @@ class AnalogItem(SubscribedVariable):
         await super().init(server)
         self.engineering_units: ua.EUInformation = None
         self.eu_range: ua.Range = None
+        self.value_precision: int = None
         self._default_decimals: int = None
         try:
             engineering_units = await self.get_child("EngineeringUnits")
@@ -1017,6 +1018,11 @@ class AnalogItem(SubscribedVariable):
             self.eu_range: ua.Range = await eu_range.get_value()
         except:
             self.eu_range = None
+        try:
+            value_precision = await self.get_child("ValuePrecision")
+            self.value_precision = int(await value_precision.get_value())
+        except:
+            self.value_precision = None
     
     @property
     def eu(self) -> str:
@@ -1036,6 +1042,8 @@ class AnalogItem(SubscribedVariable):
         return self._default_decimals
     
     def decimals(self, resolution = 1000, default = 1) -> int:
+        if self.value_precision is not None:
+            return self.value_precision
         if self.eu_range is None:
             return default
         try:
