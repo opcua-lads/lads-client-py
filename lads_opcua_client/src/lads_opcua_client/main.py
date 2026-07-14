@@ -747,10 +747,20 @@ class LADSNode(Node):
         child_objects.update(organizes_objects)
         return list(child_objects)
 
+
     async def call_namespace_method(self, name: str, ns: int, *args: Any) -> ua.StatusCode:
         try:
-            _logger.debug(f"Call method {name} with args {args}")
-            return await self.call_method(ua.QualifiedName(name, ns), *args)
+            converted_args = tuple(
+                ua.Variant([], VariantType=ua.VariantType.ExtensionObject)
+                if isinstance(arg, list) and len(arg) == 0
+                else arg
+                for arg in args
+            )
+            _logger.debug(f"Call method {name} with args {converted_args}")
+            return await self.call_method(
+                ua.QualifiedName(name, ns),
+                *converted_args,
+            )
         except Exception as error:
             _logger.error(error)
             return ua.StatusCodes.BadNotImplemented
@@ -1261,8 +1271,7 @@ class FunctionalStateMachine(StateMachine):
             self.running_state_machine = None
                 
     def buildProperties(self, properties: pd.DataFrame) -> list:
-        key_value_list = None
-        # key_value_list = []
+        key_value_list = []
         for index, row in properties.iterrows():
             key = str(row["Key"])
             value =str(row["Value"])
@@ -1270,16 +1279,13 @@ class FunctionalStateMachine(StateMachine):
                 key,
                 value,
             )
-            if key_value_list is None:
-                key_value_list = []
             key_value_list.append(key_value)
         return key_value_list
 
     def start_program(self, program_template: str, properties: pd.DataFrame, supervisory_job_id: str, supervisory_task_id: str, samples: pd.DataFrame):
         program_template_name = extract_program_template_name(program_template)
         key_value_list = self.buildProperties(properties)
-        sample_info_list = None
-        # sample_info_list = []
+        sample_info_list = []
         for index, row in samples.iterrows():
             sample_info = self.server.SampleInfoType(
                 str(row["ContainerId"]),
@@ -1287,8 +1293,6 @@ class FunctionalStateMachine(StateMachine):
                 str(row["Position"]),
                 str(row["CustomData"]),
             )
-            if sample_info_list is None:
-                sample_info_list = []
             sample_info_list.append(sample_info)
         self.call_async(self.call_lads_method("StartProgram", 
                                               program_template_name, 
@@ -1298,8 +1302,9 @@ class FunctionalStateMachine(StateMachine):
                                               sample_info_list))
             
     def start(self, properties: pd.DataFrame):
-        key_value_list = self.buildProperties(properties)
-        self.call_async(self.call_lads_method("Start", key_value_list))
+        # key_value_list = self.buildProperties(properties)
+        # self.call_async(self.call_lads_method("Start", key_value_list))
+        self.call_async(self.call_lads_method("Start", []))
 
     def start_with_target_value(self, value: float):
         self.call_async(self.call_lads_method("StartWithTargetValue", value))
