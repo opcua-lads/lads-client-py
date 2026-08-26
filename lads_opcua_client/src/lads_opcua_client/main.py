@@ -1066,7 +1066,7 @@ class AnalogItem(SubscribedVariable):
         try:
             range = abs(self.eu_range.High - self.eu_range.Low)
         except Exception:
-            _logger.debug(f"Unable to determine decimals of {self.display_name}-{self.nodeid}: EURange has no value")            
+            # _logger.debug(f"Unable to determine decimals of {self.display_name}-{self.nodeid}: EURange has no value")            
             return default
         if range >= resolution:
             return default
@@ -2269,13 +2269,32 @@ class AlarmMonitor(LADSNode):
     async def init(self, server: Server):
         await super().init(server)        
         
-        self.alarm_active_state, self.high_high_limit, self.high_limit, self.low_limit, self.low_low_limit = await asyncio.gather(
-            StateVariable.promote(await self.get_child("ActiveState"), server),
-            SubscribedVariable.promote(await self.get_child("HighHighLimit"), server),
-            SubscribedVariable.promote(await self.get_child("HighLimit"), server),
-            SubscribedVariable.promote(await self.get_child("LowLimit"), server),
-            SubscribedVariable.promote(await self.get_child("LowLowLimit"), server),
-        )
+        names = ["ActiveState", "HighHighLimit", "HighLimit", "LowLimit", "LowLowLimit"]
+        promoters = [
+            StateVariable.promote,
+            SubscribedVariable.promote,
+            SubscribedVariable.promote,
+            SubscribedVariable.promote,
+            SubscribedVariable.promote,
+        ]
+        nodes = await asyncio.gather(*(self.get_child(name) for name in names))
+        results = await asyncio.gather(*(
+            promote(node, server) for node, promote in zip(nodes, promoters) if node is not None
+        ))
+
+        result_iter = iter(results)
+        values = [next(result_iter) if node is not None else None for node in nodes]
+        (
+            self.alarm_active_state,
+            self.high_high_limit,
+            self.high_limit,
+            self.low_limit,
+            self.low_low_limit,
+        ) = values
+
+        if self.alarm_active_state is None:
+            _logger.error(f"Missing required ActiveState child on {self!r}")
+          
         limit_state = await self.get_child("LimitState")
         if limit_state is not None:
             self.alarm_limit_state = await StateVariable.promote(await limit_state.get_child("CurrentState"), server)

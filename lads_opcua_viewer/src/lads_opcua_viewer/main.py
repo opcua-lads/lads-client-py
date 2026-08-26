@@ -54,7 +54,30 @@ def format_value(x: float | list[float], decis = 1) -> str:
             result = format_number(x, decis)
     finally:
         return result
+    
+# MARK: format_analog_item
+def format_analog_item(item: lads.AnalogItem, include_eu = False) -> str:
+    result = "NaN"
+    try:
+        decis = item.decimals()
+        eu = item.eu
+        value = item.value
 
+        def scale(v: float) -> float:
+            return 0.001 * v if eu == "s" else v
+
+        if isinstance(value, list):
+            scaled = [scale(v) for v in value]
+            number = format_value(scaled, decis)
+        else:
+            number = format_number(scale(value), decis)
+
+        result = f"{number} {eu}" if include_eu else number
+    except Exception as e:
+        print(e)
+    finally:
+        return result
+    
 # MARK: format_number
 def format_number(x: float, decis = 1) -> str:
     result = "NaN"
@@ -245,12 +268,12 @@ def update_functions(function_containers: dict):
             color = function_state_color(function)
             with sp_col:
                 if function.target_value is not None:
-                    st.markdown(f":{color}[**{format_value(0.001 * function.target_value.value)}** s]", help=function.target_value.dictionary_entries_as_markdown)
+                    st.markdown(f":{color}[**{format_analog_item(function.target_value)}** s]", help=function.target_value.dictionary_entries_as_markdown)
             with pv_col: 
                 if function.current_value is not None:
-                    st.markdown(f":blue[**{format_value(0.001 * function.current_value.value)}** s]", help=function.current_value.dictionary_entries_as_markdown)
+                    st.markdown(f":blue[**{format_analog_item(function.current_value)}** s]", help=function.current_value.dictionary_entries_as_markdown)
                 if function.difference_value is not None:
-                    st.markdown(f":blue[**{format_value(0.001 * function.difference_value.value)}** s]", help=function.difference_value.dictionary_entries_as_markdown)
+                    st.markdown(f":blue[**{format_analog_item(function.difference_value)}** s]", help=function.difference_value.dictionary_entries_as_markdown)
         elif isinstance(function, lads.AnalogControlFunction):
             color = function_state_color(function)
             with sp_col:
@@ -280,7 +303,7 @@ def update_functions(function_containers: dict):
             with pv_col:
                 variable = function.sensor_value
                 help = "  \r\n".join([variable.dictionary_entries_as_markdown, get_alarm_limits(function)])
-                st.markdown(f":{variable_status_color(variable)}[**{format_value(variable.value, variable.default_decimals)}** {variable.eu} {get_alarm_indicator(function)}]", help=help)
+                st.markdown(f":{variable_status_color(variable)}[**{format_analog_item(variable)}** {variable.eu} {get_alarm_indicator(function)}]", help=help)
 
         elif isinstance(function, lads.TwoStateDiscreteSensorFunction) or isinstance(function, lads.MultiStateDiscreteSensorFunction):
             with pv_col: 
