@@ -242,13 +242,25 @@ def get_alarm_indicator(function: lads.AnalogScalarSensorFunction | lads.AnalogC
 
 def get_alarm_limits(function: lads.AnalogScalarSensorFunction | lads.AnalogControlFunction) -> str:
     
-    def tryAppend(l: list, variable: lads.BaseVariable):
-        if variable is not None:
-            l.append(f"{variable.display_name} = {format_value(variable.value)}")
             
     alarm_monitor: lads.AlarmMonitor = function.alarm_monitor
     if alarm_monitor is None:
         return ""
+    current_value_item = function.current_value if isinstance(function, lads.AnalogControlFunction) else function.sensor_value
+    target_value_item = function.target_value if isinstance(function, lads.AnalogControlFunction) else None
+    target_value = float(target_value_item.value) if target_value_item is not None else None
+    eu = current_value_item.eu
+    decis = current_value_item.decimals()
+    
+    def tryAppend(l: list, variable: lads.BaseVariable):
+        if variable is not None:
+            value = variable.value
+            scale = 0.001 if eu == "s" else 1.0
+            if target_value is None:
+                l.append(f"{variable.display_name} = {format_value(scale * value, decis)} {eu}")
+            else:
+                l.append(f"{variable.display_name} = {format_value(scale * value, decis)} {eu} ({format_value(scale * (value + target_value), decis)} {eu})")
+                
     l = []
     tryAppend(l, alarm_monitor.high_high_limit)
     tryAppend(l, alarm_monitor.high_limit)
