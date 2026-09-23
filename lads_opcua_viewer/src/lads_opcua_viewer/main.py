@@ -996,7 +996,7 @@ def main():
                     on_click = state_machine.start(pd.DataFrame()) if name == "Start" else state_machine.call_method_by_name(name) 
                     st.button(name, on_click=on_click)
             else:
-                cmd = st.selectbox("Command", options=method_names, index=None, label_visibility="collapsed", placeholder="Choose a command")
+                cmd = st.selectbox("Command", options=method_names, index=None, label_visibility="collapsed", placeholder="Choose a command", key="Command")
                 if cmd == "Start":
                     state_machine.start(pd.DataFrame())
                 else:
@@ -1006,7 +1006,7 @@ def main():
             if running_state_machine is not None:
                 methods = running_state_machine.methods
                 method_names = map(lambda method: method.display_name, methods)
-                cmd = st.selectbox("Command", options=method_names, index=None, label_visibility="collapsed", placeholder="Choose a command")
+                cmd = st.selectbox("Command", options=method_names, index=None, label_visibility="collapsed", placeholder="Choose a command", key="CommandRunning")
                 running_state_machine.call_method_by_name(cmd)                
         with col_state:
             container_state = show_state(col_state, selected_functional_unit)
