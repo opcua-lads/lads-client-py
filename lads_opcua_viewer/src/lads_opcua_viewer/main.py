@@ -310,7 +310,7 @@ def update_functions(function_containers: dict):
             if isinstance(function, lads.AnalogScalarSensorFunctionWithCompensation):
                 if function.compensation_value is not None:
                     with sp_col:
-                        variable = function.sensor_value
+                        variable = function.compensation_value
                         st.markdown(f":gray[{format_value(variable.value, variable.default_decimals)} {variable.eu}]", help=variable.dictionary_entries_as_markdown)
             with pv_col:
                 variable = function.sensor_value
