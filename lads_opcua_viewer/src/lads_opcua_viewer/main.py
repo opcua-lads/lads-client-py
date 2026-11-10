@@ -422,7 +422,7 @@ def update_charts(container, functional_unit: lads.FunctionalUnit, use_plotly=Tr
                 function, analog_item = trace
                 with st.expander(f"**Chart {function.display_name}**", expanded=(idx==0)):
                     unique_key = f"line_chart_{time.time_ns()}"
-                    st.line_chart(data = analog_item.history, height = 100, key=unique_key)
+                    st.line_chart(data = analog_item.history, height = 100)
                     idx += 1
 
         # tables
@@ -457,13 +457,13 @@ def update_charts(container, functional_unit: lads.FunctionalUnit, use_plotly=Tr
                         except AttributeError:
                             ' do nothing'
                     # st.dataframe(df, use_container_width=True, hide_index=True)
-                    st.dataframe(df, width="Stretch", hide_index=True)
+                    st.dataframe(df, width="stretch", hide_index=True)
                 else:
                     eu = analog_item.engineering_units
-                    col = eu.DisplayName.Text if eu is not None else "y"
+                    col = eu.DisplayName.Text if (eu is not None and eu.DisplayName is not None and eu.DisplayName.Text) else "y"
                     df = pd.DataFrame({col: value})
                     unique_key = f"area_chart_{time.time_ns()}"
-                    st.area_chart(df, key=unique_key)
+                    st.area_chart(df)
             idx += 1
 
 # MARK: update_events
