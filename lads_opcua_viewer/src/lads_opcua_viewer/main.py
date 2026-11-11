@@ -203,10 +203,10 @@ def show_function_set(container, path: str, function_set: lads.FunctionSet, cont
                                 for controller_parameter in function.controller_parameters:
                                     add_variable_value_input(controller_parameter.target_value, controller_parameter)
                                 current_mode = function.current_mode
-                                mode = st.selectbox(label=current_mode.display_name, on_change=write_variable_value(current_mode), options=function.modes, label_visibility="collapsed", key=current_mode.nodeid, placeholder="Choose a mode", help=current_mode.dictionary_entries_as_markdown)
+                                mode = st.selectbox(label=current_mode.display_name, on_change=write_variable_value(current_mode), options=function.modes, label_visibility="collapsed", key=current_mode.nodeid, placeholder="Choose a mode", help=help_markdown(current_mode, function))
                             elif isinstance(function, lads.DiscreteControlFunction):
                                 target_value = function.target_value
-                                cmd = st.selectbox(label="Command", options=target_value.values_as_str, index=None, label_visibility="collapsed", key=target_value.nodeid, on_change=write_discrete_variable_value(target_value), placeholder="Choose a value", help=target_value.dictionary_entries_as_markdown)
+                                cmd = st.selectbox(label="Command", options=target_value.values_as_str, index=None, label_visibility="collapsed", key=target_value.nodeid, on_change=write_discrete_variable_value(target_value), placeholder="Choose a value", help=help_markdown(target_value, function))
                             method_names = function.state_machine.method_names
                             if len(method_names) > 0:
                                 key = function.unique_name
@@ -271,6 +271,25 @@ def get_alarm_limits(function: lads.AnalogScalarSensorFunction | lads.AnalogCont
     l.insert(0, "**Alarm limits**")
     return  "  \r\n".join(l)
     
+def description_text(node) -> str:
+    """Description (LocalizedText) of a node as plain text, empty if missing."""
+    description = getattr(node, "description", None)
+    text = getattr(description, "Text", None) if description is not None else None
+    return text.strip() if text else ""
+
+def help_markdown(variable: lads.BaseVariable, function: lads.LADSNode = None, alarm_limits: str = "") -> str | None:
+    """Help text of a value widget: description of the function (or the variable if the function has none),
+    the ontology definitions of the variable and, if present, the alarm limits."""
+    parts: list[str] = []
+    description = description_text(function) or description_text(variable)
+    if description:
+        parts.append(description)
+    if variable is not None and variable.dictionary_entries_as_markdown:
+        parts.append(variable.dictionary_entries_as_markdown)
+    if alarm_limits:
+        parts.append(alarm_limits)
+    return "  \r\n".join(parts) if parts else None
+
 def update_functions(function_containers: dict):
     for function, containers in function_containers.items():
         container_sp, container_pv = containers
@@ -280,57 +299,57 @@ def update_functions(function_containers: dict):
             color = function_state_color(function)
             with sp_col:
                 if function.target_value is not None:
-                    st.markdown(f":{color}[**{format_analog_item(function.target_value)}** s]", help=function.target_value.dictionary_entries_as_markdown)
+                    st.markdown(f":{color}[**{format_analog_item(function.target_value)}** s]", help=help_markdown(function.target_value, function))
             with pv_col: 
                 if function.current_value is not None:
-                    st.markdown(f":blue[**{format_analog_item(function.current_value)}** s]", help=function.current_value.dictionary_entries_as_markdown)
+                    st.markdown(f":blue[**{format_analog_item(function.current_value)}** s]", help=help_markdown(function.current_value, function))
                 if function.difference_value is not None:
-                    st.markdown(f":blue[**{format_analog_item(function.difference_value)}** s]", help=function.difference_value.dictionary_entries_as_markdown)
+                    st.markdown(f":blue[**{format_analog_item(function.difference_value)}** s]", help=help_markdown(function.difference_value, function))
         elif isinstance(function, lads.AnalogControlFunction):
             color = function_state_color(function)
             with sp_col:
                 variable = function.target_value
-                st.markdown(f":{color}[**{format_value(variable.value, variable.default_decimals)}** {variable.eu}]", help=variable.dictionary_entries_as_markdown)
+                st.markdown(f":{color}[**{format_value(variable.value, variable.default_decimals)}** {variable.eu}]", help=help_markdown(variable, function))
                 if isinstance(function, lads.AnalogControlFunctionWithTotalizer):
                     st.markdown(":gray[Totalizer]")
             with pv_col: 
                 variable = function.current_value
-                help = "  \r\n".join([variable.dictionary_entries_as_markdown, get_alarm_limits(function)])                
+                help = help_markdown(variable, function, get_alarm_limits(function))                
                 st.markdown(f":{variable_status_color(variable)}[**{format_value(variable.value, variable.default_decimals)}** {variable.eu} {get_alarm_indicator(function)}]", help=help)
                 if isinstance(function, lads.AnalogControlFunctionWithTotalizer):
                     variable = function.totalized_value
-                    st.markdown(f":blue[**{format_value(variable.value, variable.default_decimals)}** {variable.eu}]", help=variable.dictionary_entries_as_markdown)
+                    st.markdown(f":blue[**{format_value(variable.value, variable.default_decimals)}** {variable.eu}]", help=help_markdown(variable, function))
         elif isinstance(function, lads.TwoStateDiscreteControlFunction) or isinstance(function, lads.MultiStateDiscreteControlFunction) :
             color = function_state_color(function)
             with sp_col:
-                st.markdown(f":{color}[**{function.target_value.value_str}**]", help=function.target_value.dictionary_entries_as_markdown)
+                st.markdown(f":{color}[**{function.target_value.value_str}**]", help=help_markdown(function.target_value, function))
             with pv_col: 
-                st.markdown(f":{variable_status_color(function.current_value)}[**{function.current_value.value_str}**]", help=function.current_value.dictionary_entries_as_markdown)
+                st.markdown(f":{variable_status_color(function.current_value)}[**{function.current_value.value_str}**]", help=help_markdown(function.current_value, function))
         elif isinstance(function, lads.AnalogScalarSensorFunction):
             if isinstance(function, lads.AnalogScalarSensorFunctionWithCompensation):
                 if function.compensation_value is not None:
                     with sp_col:
                         variable = function.compensation_value
-                        st.markdown(f":gray[{format_value(variable.value, variable.default_decimals)} {variable.eu}]", help=variable.dictionary_entries_as_markdown)
+                        st.markdown(f":gray[{format_value(variable.value, variable.default_decimals)} {variable.eu}]", help=help_markdown(variable, function))
             with pv_col:
                 variable = function.sensor_value
-                help = "  \r\n".join([variable.dictionary_entries_as_markdown, get_alarm_limits(function)])
+                help = help_markdown(variable, function, get_alarm_limits(function))
                 st.markdown(f":{variable_status_color(variable)}[**{format_analog_item(variable)}** {variable.eu} {get_alarm_indicator(function)}]", help=help)
 
         elif isinstance(function, lads.TwoStateDiscreteSensorFunction) or isinstance(function, lads.MultiStateDiscreteSensorFunction):
             with pv_col: 
-                st.markdown(f":{variable_status_color(function.sensor_value)}[**{function.sensor_value.value_str}**]", help=function.sensor_value.dictionary_entries_as_markdown)
+                st.markdown(f":{variable_status_color(function.sensor_value)}[**{function.sensor_value.value_str}**]", help=help_markdown(function.sensor_value, function))
         elif isinstance(function, lads.CoverFunction):
             with pv_col: 
-                st.markdown(f":{variable_status_color(function.current_state)}[**{function.current_state.value_str}**]", help=function.current_state.dictionary_entries_as_markdown)
+                st.markdown(f":{variable_status_color(function.current_state)}[**{function.current_state.value_str}**]", help=help_markdown(function.current_state, function))
         elif isinstance(function, lads.StartStopControlFunction):
             with pv_col: 
-                st.markdown(f":{function_state_color(function)}[**{function.current_state.value_str}**]", help=function.current_state.dictionary_entries_as_markdown)
+                st.markdown(f":{function_state_color(function)}[**{function.current_state.value_str}**]", help=help_markdown(function.current_state, function))
         elif isinstance(function, lads.MulitModeControlFunction):
             for controller_parameter in function.controller_parameters:
                 with sp_col:
                     variable = controller_parameter.target_value
-                    st.markdown(f":{function_state_color(function)}[**{format_value(variable.value, variable.default_decimals)}** {variable.eu}]", help=variable.dictionary_entries_as_markdown)
+                    st.markdown(f":{function_state_color(function)}[**{format_value(variable.value, variable.default_decimals)}** {variable.eu}]", help=help_markdown(variable, function))
                 with pv_col: 
                     variable = controller_parameter.current_value
                     st.write(f":{variable_status_color(variable)}[**{format_value(variable.value, variable.default_decimals)}** {variable.eu}]")
