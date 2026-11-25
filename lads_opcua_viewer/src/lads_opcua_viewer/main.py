@@ -166,6 +166,16 @@ def write_discrete_variable_value(variable: lads.DiscreteVariable):
     variable.set_value_from_str(st.session_state[key])
     st.session_state[key] = None
 
+# MARK: modify_target_value_by
+def modify_target_value_by(function, key: str):
+    """on_change of the 'Change by' input: calls ModifyTargetValueBy once with the entered value"""
+    value = st.session_state.get(key)
+    if value is None:
+        return
+    function.modify_target_value_by(value)
+    st.toast(f"{function.display_name}.ModifyTargetValueBy({value})")
+    st.session_state[key] = None
+
 # MARK: add_variable_value_input
 def add_variable_value_input(variable: lads.BaseVariable, parent: lads.LADSNode = None, show_label: bool = False):
     if variable is None:
@@ -205,6 +215,14 @@ def show_function_set(container, path: str, function_set: lads.FunctionSet, cont
                                     # the partial target values (TargetValueSet), e.g. Flow and PercentageSolventB of a pump
                                     for partial in function.target_value_set:
                                         add_variable_value_input(partial, function, show_label=True)
+                                if isinstance(function, lads.AnalogControlFunctionWithRelativeTargetValue):
+                                    # rates (e.g. aspirating / dispensing rate) and the relative change of the target value
+                                    for rate in function.rates:
+                                        add_variable_value_input(rate, function, show_label=True)
+                                    if function.has_modify_target_value_by:
+                                        key = f"{function.unique_name}.ModifyTargetValueBy"
+                                        st.number_input(f"Change by [{function.target_value.eu}]", value=None, key=key, on_change=modify_target_value_by(function, key),
+                                                        help="ModifyTargetValueBy: changes the target value by this amount (positive or negative)")
                             elif isinstance(function, lads.MulitModeControlFunction):
                                 for controller_parameter in function.controller_parameters:
                                     add_variable_value_input(controller_parameter.target_value, controller_parameter)
@@ -318,6 +336,9 @@ def update_functions(function_containers: dict):
                 st.markdown(f":{color}[**{format_value(variable.value, variable.default_decimals)}** {variable.eu}]", help=help_markdown(variable, function))
                 if isinstance(function, lads.AnalogControlFunctionWithTotalizer):
                     st.markdown(":gray[Totalizer]")
+                if isinstance(function, lads.AnalogControlFunctionWithRelativeTargetValue):
+                    for rate in function.rates:
+                        st.markdown(f":{color}[{rate.display_name}: **{format_value(rate.value, rate.default_decimals)}** {rate.eu}]", help=help_markdown(rate, function))
                 if isinstance(function, lads.AnalogControlFunctionWithComposedTargetValue):
                     for partial in function.target_value_set:
                         eu = getattr(partial, "eu", "")

@@ -86,6 +86,7 @@ class LADSObjectIds(IntEnum):
     AnalogControlFunctionType = 1009
     AnalogControlFunctionWithTotalizerType = 1014
     AnalogControlFunctionWithComposedTargetValueType = 1052
+    AnalogControlFunctionWithRelativeTargetValueType = 1029
     TimerControlFunctionType = 1013
     TwoStateDiscreteControlFunctionType = 1042
     MultiStateDiscreteControlFunctionType = 1045
@@ -180,6 +181,7 @@ class LADSTypes:
         self.AnalogControlFunctionType = self.get_lads_node(LADSObjectIds.AnalogControlFunctionType)
         self.AnalogControlFunctionWithTotalizerType = self.get_lads_node(LADSObjectIds.AnalogControlFunctionWithTotalizerType)
         self.AnalogControlFunctionWithComposedTargetValueType = self.get_lads_node(LADSObjectIds.AnalogControlFunctionWithComposedTargetValueType)
+        self.AnalogControlFunctionWithRelativeTargetValueType = self.get_lads_node(LADSObjectIds.AnalogControlFunctionWithRelativeTargetValueType)
         self.TimerControlFunctionType = self.get_lads_node(LADSObjectIds.TimerControlFunctionType)
         self.TwoStateDiscreteControlFunctionType = self.get_lads_node(LADSObjectIds.TwoStateDiscreteControlFunctionType)
         self.MultiStateDiscreteControlFunctionType = self.get_lads_node(LADSObjectIds.MultiStateDiscreteControlFunctionType)
@@ -1814,6 +1816,8 @@ class FunctionSet(LADSSet):
                 function = await AnalogControlFunctionWithTotalizer.promote(child, server)
             elif server.AnalogControlFunctionWithComposedTargetValueType in types:
                 function = await AnalogControlFunctionWithComposedTargetValue.promote(child, server)
+            elif server.AnalogControlFunctionWithRelativeTargetValueType in types:
+                function = await AnalogControlFunctionWithRelativeTargetValue.promote(child, server)
             elif server.AnalogControlFunctionType in types:
                 function = await AnalogControlFunction.promote(child, server)
             elif server.TimerControlFunctionType in types:
@@ -2545,6 +2549,49 @@ class AnalogControlFunctionWithComposedTargetValue(AnalogControlFunction):
     @property
     def variables(self) -> list[BaseVariable]:
         return super().variables + self.target_value_set
+
+# MARK: AnalogControlFunctionWithRelativeTargetValue
+class AnalogControlFunctionWithRelativeTargetValue(AnalogControlFunction):
+    """
+    AnalogControlFunction whose target value is typically changed by relative increments or decrements
+    (LADS AnalogControlFunctionWithRelativeTargetValueType), e.g. a dispenser that aspirates or dispenses a volume.
+
+    Attributes:
+        increase_rate: AnalogItem | None - rate by which the value is increased (e.g. aspirating rate), optional
+        decrease_rate: AnalogItem | None - rate by which the value is decreased (e.g. dispensing rate), optional
+        has_modify_target_value_by: bool - the optional method ModifyTargetValueBy exists
+    """
+    @classmethod
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(AnalogControlFunctionWithRelativeTargetValue, node, server.AnalogControlFunctionWithRelativeTargetValueType, server)
+
+    def __str__(self):
+        parts = "".join(f"\n  {variable}" for variable in self.rates)
+        return f"{super().__str__()}{parts}"
+
+    async def init(self, server: Server):
+        await super().init(server)
+        increase, decrease, method = await asyncio.gather(
+            self.get_lads_child("IncreaseRate"), self.get_lads_child("DecreaseRate"), self.get_lads_child("ModifyTargetValueBy"))
+        self.increase_rate: AnalogItem | None = await AnalogItem.promote(increase, server) if increase is not None else None
+        self.decrease_rate: AnalogItem | None = await AnalogItem.promote(decrease, server) if decrease is not None else None
+        self.has_modify_target_value_by: bool = method is not None
+
+    @property
+    def rates(self) -> list[AnalogItem]:
+        return remove_none([self.increase_rate, self.decrease_rate])
+
+    def modify_target_value_by(self, value: float):
+        """Calls ModifyTargetValueBy(value): the target value changes by value (positive or negative)."""
+        if self.has_modify_target_value_by:
+            self.call_async(self.call_lads_method("ModifyTargetValueBy", ua.Variant(float(value), ua.VariantType.Double)))
+
+    async def modify_target_value_by_async(self, value: float) -> Any:
+        return await self.call_lads_method("ModifyTargetValueBy", ua.Variant(float(value), ua.VariantType.Double))
+
+    @property
+    def variables(self) -> list[BaseVariable]:
+        return super().variables + self.rates
 
 # MARK: TimerControlFunction
 class TimerControlFunction(AnalogControlFunction):
