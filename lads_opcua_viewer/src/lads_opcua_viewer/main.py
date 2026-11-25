@@ -745,13 +745,16 @@ def show_components(component: lads.Component, expanded_count):
                         start = to_float(counter.start_value.value, default=100.0)
                         limit = to_float(counter.limit_value.value, default=0.0)
                         eu = counter.eu
-                        warning = False if counter.warning_values is None else any(value < float(warning_value) for warning_value in counter.warning_values.value)
-                        alarm = value < limit
+                        # the counter runs from start to limit, downwards (start > limit) or upwards (start < limit)
+                        counts_down = start >= limit
+                        passed = (lambda v, reference: v < reference) if counts_down else (lambda v, reference: v > reference)
+                        warning = False if counter.warning_values is None else any(passed(value, float(warning_value)) for warning_value in counter.warning_values.value)
+                        alarm = passed(value, limit)
                         color = "red" if alarm else "orange" if warning else "green"
                         s = f"{counter.display_name} [{format_number(start)} > :{color}[**{format_number(value)}**] > {format_number(limit)}] {eu}"
-                        r = start - limit
-                        x = value / r + limit if abs(r) > 0 else 0
-                        st.progress(x if x > 0 else 0, s)  
+                        low, high = min(start, limit), max(start, limit)
+                        x = (value - low) / (high - low) if high > low else 0       # the bar follows the value between start and limit
+                        st.progress(min(max(x, 0.0), 1.0), s)
                     except Exception as e:
                         pass
 
