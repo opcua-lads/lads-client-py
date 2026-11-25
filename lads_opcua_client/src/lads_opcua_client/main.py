@@ -28,6 +28,7 @@ import sys
 import threading
 import time
 import json
+import os
 import pandas as pd
 import datetime as dt
 from typing import List, Type, NewType, Any, Self, Tuple, Set
@@ -2789,6 +2790,27 @@ def get_value(data: dict, key: str) -> any:
     else:
         return None
 
+_ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+def expand_env(value: any) -> any:
+    """
+    Replaces ${VAR} in strings with the value of the environment variable VAR.
+    Non-string values (e.g. None) are returned unchanged.
+
+    Raises:
+        KeyError: If a referenced environment variable is not set.
+    """
+    if not isinstance(value, str):
+        return value
+
+    def replace(match: re.Match) -> str:
+        name = match.group(1)
+        if name not in os.environ:
+            raise KeyError(f"Environment variable '{name}' is not set")
+        return os.environ[name]
+
+    return _ENV_PATTERN.sub(replace, value)
+
 # MARK: Connections
 class Connections:
     """
@@ -2824,13 +2846,16 @@ class Connections:
                 print(f"parsing config file {config_file}")
                 data = json.load(f)
                 for connection in data["connections"]:
-                    url = connection["url"]
-                    user = get_value(connection, "user") 
-                    password = get_value(connection, "password")
-                    enabled = get_value(connection, "enabled") if not None else True
-                    if enabled:
-                        print(f"Add conncetion with url {url}")
-                        self.add(url, user, password)
+                    enabled = get_value(connection, "enabled")
+                    if enabled is None:
+                        enabled = True
+                    if not enabled:
+                        continue
+                    url = expand_env(connection["url"])
+                    user = expand_env(get_value(connection, "user"))
+                    password = expand_env(get_value(connection, "password"))
+                    print(f"Add conncetion with url {url}")
+                    self.add(url, user, password)
         except Exception as error:
             _logger.error(f"Invalid config file {config_file}: {error}")
 
