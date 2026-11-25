@@ -85,6 +85,7 @@ class LADSObjectIds(IntEnum):
     MultiStateDiscreteSensorFunctionType = 1037
     AnalogControlFunctionType = 1009
     AnalogControlFunctionWithTotalizerType = 1014
+    AnalogControlFunctionWithComposedTargetValueType = 1052
     TimerControlFunctionType = 1013
     TwoStateDiscreteControlFunctionType = 1042
     MultiStateDiscreteControlFunctionType = 1045
@@ -178,6 +179,7 @@ class LADSTypes:
         self.MultiStateDiscreteSensorFunctionType = self.get_lads_node(LADSObjectIds.MultiStateDiscreteSensorFunctionType)
         self.AnalogControlFunctionType = self.get_lads_node(LADSObjectIds.AnalogControlFunctionType)
         self.AnalogControlFunctionWithTotalizerType = self.get_lads_node(LADSObjectIds.AnalogControlFunctionWithTotalizerType)
+        self.AnalogControlFunctionWithComposedTargetValueType = self.get_lads_node(LADSObjectIds.AnalogControlFunctionWithComposedTargetValueType)
         self.TimerControlFunctionType = self.get_lads_node(LADSObjectIds.TimerControlFunctionType)
         self.TwoStateDiscreteControlFunctionType = self.get_lads_node(LADSObjectIds.TwoStateDiscreteControlFunctionType)
         self.MultiStateDiscreteControlFunctionType = self.get_lads_node(LADSObjectIds.MultiStateDiscreteControlFunctionType)
@@ -1810,6 +1812,8 @@ class FunctionSet(LADSSet):
             function: Function = None
             if server.AnalogControlFunctionWithTotalizerType in types:
                 function = await AnalogControlFunctionWithTotalizer.promote(child, server)
+            elif server.AnalogControlFunctionWithComposedTargetValueType in types:
+                function = await AnalogControlFunctionWithComposedTargetValue.promote(child, server)
             elif server.AnalogControlFunctionType in types:
                 function = await AnalogControlFunction.promote(child, server)
             elif server.TimerControlFunctionType in types:
@@ -2496,6 +2500,51 @@ class AnalogControlFunctionWithTotalizer(AnalogControlFunction):
     @property
     def variables(self) ->list[BaseVariable]:
         return super().variables + [self.totalized_value]
+
+# MARK: AnalogControlFunctionWithComposedTargetValue
+class AnalogControlFunctionWithComposedTargetValue(AnalogControlFunction):
+    """
+    AnalogControlFunction whose target value is composed of partial values (LADS AnalogControlFunctionWithComposedTargetValueType):
+    the mandatory TargetValueSet holds the partial target values, e.g. Flow and PercentageSolventB of an HPLC pump.
+    TargetValue and CurrentValue are those of AnalogControlFunction.
+
+    Attributes:
+        target_value_set: list[BaseVariable] - the partial target values (AnalogItem if the variable is one), sorted by name.
+    """
+    @classmethod
+    async def promote(cls, node: Node, server: Server) -> Self:
+        return await promote_to(AnalogControlFunctionWithComposedTargetValue, node, server.AnalogControlFunctionWithComposedTargetValueType, server)
+
+    def __str__(self):
+        parts = "".join(f"\n  {variable}" for variable in self.target_value_set)
+        return f"{super().__str__()}{parts}"
+
+    async def init(self, server: Server):
+        await super().init(server)
+        self.target_value_set: list[BaseVariable] = []
+        node = await self.get_lads_child("TargetValueSet")
+        if node is None:
+            return
+        children = await node.get_children(refs = ua.ObjectIds.HierarchicalReferences, nodeclassmask = ua.NodeClass.Variable)
+
+        async def promote_partial(child: Node) -> BaseVariable | None:
+            if "NodeVersion" in (await child.read_browse_name()).Name:
+                return None
+            try:
+                return await AnalogItem.promote(child, server)
+            except AssertionError:
+                return await SubscribedVariable.promote(child, server)
+
+        self.target_value_set = remove_none(await asyncio.gather(*(promote_partial(child) for child in children)))
+        self.target_value_set.sort(key = lambda variable: variable.display_name)
+
+    def partial_target_value(self, name: str) -> BaseVariable | None:
+        """The partial target value with this display name, None if there is none."""
+        return next((variable for variable in self.target_value_set if variable.display_name == name), None)
+
+    @property
+    def variables(self) -> list[BaseVariable]:
+        return super().variables + self.target_value_set
 
 # MARK: TimerControlFunction
 class TimerControlFunction(AnalogControlFunction):

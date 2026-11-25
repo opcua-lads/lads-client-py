@@ -167,14 +167,16 @@ def write_discrete_variable_value(variable: lads.DiscreteVariable):
     st.session_state[key] = None
 
 # MARK: add_variable_value_input
-def add_variable_value_input(variable: lads.BaseVariable, parent: lads.LADSNode = None):
+def add_variable_value_input(variable: lads.BaseVariable, parent: lads.LADSNode = None, show_label: bool = False):
     if variable is None:
         return
     if variable.has_write_access:
         help = f"{variable.display_name}: {variable.description.Text}"
         if parent is not None:
             help = f"{parent.display_name}.{help}"
-        st.number_input(variable.display_name, on_change = write_variable_value(variable), value=None, placeholder=str(variable.value), key=variable.nodeid, label_visibility="collapsed", help = help)
+        eu = getattr(variable, "eu", "")
+        label = f"{variable.display_name} [{eu}]" if eu else variable.display_name
+        st.number_input(label, on_change = write_variable_value(variable), value=None, placeholder=str(variable.value), key=variable.nodeid, label_visibility="visible" if show_label else "collapsed", help = help)
 
 # MARK: show_functions
 def show_functions(container, functional_unit: lads.FunctionalUnit) -> dict:
@@ -199,6 +201,10 @@ def show_function_set(container, path: str, function_set: lads.FunctionSet, cont
                         if isinstance(function, lads.BaseStateMachineFunction):
                             if isinstance(function, lads.AnalogControlFunction):
                                 add_variable_value_input(function.target_value, function)
+                                if isinstance(function, lads.AnalogControlFunctionWithComposedTargetValue):
+                                    # the partial target values (TargetValueSet), e.g. Flow and PercentageSolventB of a pump
+                                    for partial in function.target_value_set:
+                                        add_variable_value_input(partial, function, show_label=True)
                             elif isinstance(function, lads.MulitModeControlFunction):
                                 for controller_parameter in function.controller_parameters:
                                     add_variable_value_input(controller_parameter.target_value, controller_parameter)
@@ -312,6 +318,12 @@ def update_functions(function_containers: dict):
                 st.markdown(f":{color}[**{format_value(variable.value, variable.default_decimals)}** {variable.eu}]", help=help_markdown(variable, function))
                 if isinstance(function, lads.AnalogControlFunctionWithTotalizer):
                     st.markdown(":gray[Totalizer]")
+                if isinstance(function, lads.AnalogControlFunctionWithComposedTargetValue):
+                    for partial in function.target_value_set:
+                        eu = getattr(partial, "eu", "")
+                        decimals = getattr(partial, "default_decimals", 2)
+                        value = format_value(partial.value, decimals) if isinstance(partial.value, (int, float)) else partial.value_str
+                        st.markdown(f":{color}[{partial.display_name}: **{value}** {eu}]", help=help_markdown(partial, function))
             with pv_col: 
                 variable = function.current_value
                 help = help_markdown(variable, function, get_alarm_limits(function))                
