@@ -408,6 +408,10 @@ def remove_none(nodes: list[Node]) -> list[Node]:
     return list(filter(lambda node: node is not None, nodes))
 
 # MARK: SubscriptionHandler
+# queue size of the event subscriptions: events raised in a burst (e.g. a state change of a functional unit and its
+# controllers) within one publishing interval
+EVENT_QUEUE_SIZE = 1000
+
 class SubscriptionHandler(object):
     """
     Handles data change and event notifications for subscribed variables.
@@ -467,7 +471,9 @@ class SubscriptionHandler(object):
         if self.subscription is None:
             self.subscription = await server.client.create_subscription(period, self)
         self.event_node: LADSNode = node
-        return await self.subscription.subscribe_events(node)        
+        # asyncua subscribes events with queuesize=0 ("server default"); node-opcua revises that to 1, so of several events
+        # raised within one publishing interval only one is delivered. A queue keeps all of them (asyncua 1.1.8 … 2.1.0).
+        return await self.subscription.subscribe_events(node, queuesize=EVENT_QUEUE_SIZE)
  
     async def datachange_notification(self, node: Node, val: Any, data: DataChangeNotif):
         """
@@ -493,9 +499,8 @@ class SubscriptionHandler(object):
             event: Event - the event.
         """
 
-        # obviously there is a bug in the library subscription.py
-        #   async def _call_event(self, eventlist: ua.EventNotificationList) -> None: 
-        # ua.EventNotificationList has always only one element, even if multiple events are sent..
+        # several events within one publishing interval arrive here one by one, as long as the event subscription has a
+        # queue (subscribe_events: queuesize=EVENT_QUEUE_SIZE); with the asyncua default the server keeps only one of them
         fields_dict = event.get_event_props_as_fields_dict()
         event_fields = {}
         try:
