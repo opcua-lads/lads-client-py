@@ -6,7 +6,7 @@ import logging
 import sys
 
 # initialize logger (one logger for the whole package, so that all modules share its handler)
-level = logging.DEBUG
+level = logging.WARNING
 _logger = logging.getLogger(__package__)
 _logger.setLevel(level)
 console_handler = logging.StreamHandler(sys.stdout)

@@ -6,7 +6,6 @@ import asyncio
 from asyncua import Node
 from asyncua.common.events import Event
 from typing import Self, TYPE_CHECKING, Tuple
-from .compliance import ComplianceDocument, ComplianceDocumentSet
 from .component import Component, Lock
 from .functional_unit import FunctionalUnit
 from .ids import SubscriptionLevel
@@ -19,7 +18,6 @@ from .variables import BaseVariable
 
 if TYPE_CHECKING:
     from .server import Server
-    from .sets import LADSSet
     from .variables import SubscribedVariable
 
 
@@ -56,7 +54,6 @@ class Device(Component):
         self.operational_location: SubscribedVariable = None
         self.state_machine_variables: list[BaseVariable] = []
         self.device_type_images = []
-        self.compliance_document_set: LADSSet = None
         await super().init(server)
 
         functional_unit_set = await self.get_lads_child("FunctionalUnitSet")
@@ -93,15 +90,6 @@ class Device(Component):
                 from sys import getsizeof
                 if value != None and getsizeof(value) > 0:
                     self.device_type_images.append(value)
-
-        # compliance documents
-        if server.ns_LADS_CD is not None:
-            self.compliance_document_set = await ComplianceDocumentSet.promote(await self.get_lads_cd_child("ComplianceDocumentSet"), self.server)
-            if self.compliance_document_set is not None:
-                _logger.debug("loading compliance documents")
-                await self.compliance_document_set.promote_children(ComplianceDocument, self.server.ComplianceDocumentType, self.server.ComplianceDocumentSetType)
-            else:
-                _logger.debug("unable to find compliance document set")
 
 
     async def finalize_init(self):
@@ -164,11 +152,7 @@ class Device(Component):
 
     @property
     def variables(self) ->list[BaseVariable]:
-        document_set_node_version = self.compliance_document_set.node_version if self.compliance_document_set is not None else None
-        _logger.debug(document_set_node_version)
-        vars = self.name_plate_variables + self.state_machine_variables
-        vars.append(self.compliance_document_set.node_version if self.compliance_document_set is not None else None)
-        return remove_none(vars)
+        return self.name_plate_variables + self.state_machine_variables
 
     @property
     def events(self) ->list[Event]:

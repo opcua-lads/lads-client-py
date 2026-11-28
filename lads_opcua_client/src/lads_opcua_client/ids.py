@@ -1,4 +1,4 @@
-"""Node ids of the LADS, LADS compliance-document, Machinery and DI namespaces."""
+"""Node ids of the LADS, Machinery and DI namespaces."""
 
 from __future__ import annotations
 
@@ -43,16 +43,6 @@ class LADSObjectIds(IntEnum):
     ResultFileSetType = 1022
     ResultFileType = 1001
     VariableSetType = 1041
-
-
-class LADS_CD_ObjectIds(IntEnum):
-    """LADS Compliance Document specific numerical node-ids"""
-    ComplianceDocumentSetType = 1000
-    ComplianceDocumentType = 1001
-    HasComplianceDocument = 4000
-    HasCalibrationCertificate = 4001
-    HasValidationReport = 4002
-    HasQualificationProtocol = 4003
 
 
 class MachineryObjectIds(IntEnum):

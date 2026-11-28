@@ -37,7 +37,6 @@ from .state_machine import *
 from .sets import *
 from .component import *
 from .program import *
-from .compliance import *
 from .alarm_monitor import *
 from .functions import *
 from .functional_unit import *

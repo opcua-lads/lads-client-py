@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from asyncua import Client, Node, ua
 from typing import Type
-from .ids import DIObjectIds, LADSObjectIds, LADS_CD_ObjectIds, MachineryObjectIds
+from .ids import DIObjectIds, LADSObjectIds, MachineryObjectIds
 from .log import _logger
 
 
@@ -21,10 +21,6 @@ class LADSTypes:
         self.ns_AMB = await self.client.get_namespace_index("http://opcfoundation.org/UA/AMB/")
         self.ns_Machinery = await self.client.get_namespace_index("http://opcfoundation.org/UA/Machinery/")
         self.ns_LADS = await self.client.get_namespace_index("http://opcfoundation.org/UA/LADS/")
-        try:
-            self.ns_LADS_CD = await self.client.get_namespace_index("http://aixengineers.de/LADS-CD/")
-        except:
-            self.ns_LADS_CD = None
 
         # get well known type nodes
         self.BaseObjectType = self.get_node(ua.ObjectIds.BaseObjectType)
@@ -74,14 +70,6 @@ class LADSTypes:
         self.ResultFileSetType = self.get_lads_node(LADSObjectIds.ResultFileSetType)
         self.ResultFileType = self.get_lads_node(LADSObjectIds.ResultFileType)
         self.VariableSetType = self.get_lads_node(LADSObjectIds.VariableSetType)
-        # LADS Compliance Documemts (experimental)
-        if self.ns_LADS_CD is not None:
-            self.ComplianceDocumentSetType = self.get_lads_cd_node(LADS_CD_ObjectIds.ComplianceDocumentSetType)
-            self.ComplianceDocumentType = self.get_lads_cd_node(LADS_CD_ObjectIds.ComplianceDocumentType)
-            self.HasComplianceDocument = self.get_lads_cd_node(LADS_CD_ObjectIds.HasComplianceDocument)
-            self.HasCalibrationCertificate = self.get_lads_cd_node(LADS_CD_ObjectIds.HasCalibrationCertificate)
-            self.HasValidationReport = self.get_lads_cd_node(LADS_CD_ObjectIds.HasValidationReport)
-            self.HasQualificationProtocol = self.get_lads_cd_node(LADS_CD_ObjectIds.HasQualificationProtocol)
 
         # read data tyoes only once - asyncua design problem..
         if Connection.data_types is None:
@@ -123,9 +111,3 @@ class LADSTypes:
 
     def get_lads_node(self, id: int) -> Node | None:
         return self.client.get_node(ua.NodeId(int(id), self.ns_LADS))
-
-    def get_lads_cd_node(self, id: int) -> Node | None:
-        if self.ns_LADS_CD is not None:
-            return self.client.get_node(ua.NodeId(int(id), self.ns_LADS_CD))
-        else:
-            return None

@@ -9,7 +9,6 @@ LICENSE file in the root directory of this source tree.
 """
 
 import datetime as dt
-import lads_opcua_client as lads
 import pandas as pd
 import streamlit as st
 import time
@@ -18,7 +17,6 @@ from lads_opcua_viewer.keys import lastEventListUpdateKey, selectedFunctionalUni
 from lads_opcua_viewer.ui import empty
 from lads_opcua_viewer.views.assets import show_asset_management, update_asset_management
 from lads_opcua_viewer.views.charts import update_charts
-from lads_opcua_viewer.views.documents import show_documents, update_documents
 from lads_opcua_viewer.views.events import update_events
 from lads_opcua_viewer.views.functions import show_functions, update_functions
 from lads_opcua_viewer.views.program import show_active_program, update_active_program, update_result_set
@@ -114,17 +112,7 @@ def main():
                 # st.markdown(":gray[Definition]", help = definition)
                 st.markdown(" ", help = definition)
 
-    # eventually create addtional tab for compliance documents
-    document_set: lads.LADSSet = None
-    try:
-        document_set = selected_functional_unit.device.compliance_document_set
-    except(Exception):
-        pass
-    if document_set is not None:
-        tab_functions, tab_program_manager, tab_device, tab_documents = st.tabs(["Operation", "Program Management", "Asset Management", "Compliance Documents"])
-    else:
-        tab_functions, tab_program_manager, tab_device = st.tabs(["Operation", "Program Management", "Asset Management"])
-        tab_documents = None
+    tab_functions, tab_program_manager, tab_device = st.tabs(["Operation", "Program Management", "Asset Management"])
     container_functional_unit = st.empty()
     empty(container_functional_unit)
     with container_functional_unit:
@@ -151,10 +139,6 @@ def main():
         with tab_device:
             container_device, container_map, container_image, container_components = show_asset_management(empty(st.empty()), selected_functional_unit.device)
 
-        if tab_documents is not None:
-            with tab_documents:
-                container_documents, container_document_detail = show_documents(empty(st.empty()), document_set)
-
         # Display the events table
         with st.container():
             st.divider()
@@ -177,8 +161,6 @@ def main():
                     index = 0
                     update_charts(container_chart, selected_functional_unit, True)
                     update_result_set(container_results, selected_functional_unit)
-                    if tab_documents is not None:
-                        update_documents(container_documents, container_document_detail, document_set)
                 time.sleep(1)
 
         update_loop()

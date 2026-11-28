@@ -129,38 +129,6 @@ class LADSNode(Node):
         references = await self._browse_next(results)
         return references
 
-    async def get_references_of_type(
-        self,
-        reference_type: Node,
-        direction: ua.BrowseDirection = ua.BrowseDirection.Both,
-        nodeclassmask: ua.NodeClass = ua.NodeClass.Unspecified,
-        includesubtypes: bool = True,
-        result_mask: ua.BrowseResultMask = ua.BrowseResultMask.All
-    ) -> List[ua.ReferenceDescription]:
-        """
-        returns references of the node based on specific filter defined with:
-
-        refs = ObjectId of the Reference
-        direction = Browse direction for references
-        nodeclassmask = filter nodes based on specific class
-        includesubtypes = If true subtypes of the reference (ref) are also included
-        result_mask = define what results information are requested
-        """
-        desc = ua.BrowseDescription()
-        desc.BrowseDirection = direction
-        desc.ReferenceTypeId = reference_type.nodeid
-        desc.IncludeSubtypes = includesubtypes
-        desc.NodeClassMask = nodeclassmask
-        desc.ResultMask = result_mask
-        desc.NodeId = self.nodeid
-        params = ua.BrowseParameters()
-        params.View.Timestamp = ua.get_win_epoch()
-        params.NodesToBrowse.append(desc)
-        params.RequestedMaxReferencesPerNode = 0
-        results = await self.session.browse(params)
-        references = await self._browse_next(results)
-        return references
-
 
     @property
     def display_name(self) -> str:
@@ -238,19 +206,6 @@ class LADSNode(Node):
     async def get_lads_variable(self, name : str) -> BaseVariable:
         from .variables import BaseVariable  # lazy: avoids a circular import
         return await BaseVariable.promote(await self.get_lads_child(name), self.server)
-
-    async def get_lads_cd_child(self, name : str) -> Node:
-        if self.server.ns_LADS_CD is not None:
-            return await self.get_child_or_none(ua.QualifiedName(name, self.server.ns_LADS_CD))
-        else:
-            return None
-
-    async def get_lads_cd_variable(self, name : str) -> BaseVariable:
-        from .variables import BaseVariable  # lazy: avoids a circular import
-        if self.server.ns_LADS_CD is not None:
-            return await BaseVariable.promote(await self.get_lads_cd_child(name), self.server)
-        else:
-            return None
 
     async def get_child_objects(self, parent: Node = None) -> list[Node]:
         if parent is None: parent = self
