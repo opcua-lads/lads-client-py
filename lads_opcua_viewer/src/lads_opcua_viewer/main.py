@@ -40,9 +40,10 @@ def get_initialized_connections() -> lads.Connections:
     connections.connect()
     urls = ", ".join(connections.urls)
     with st.spinner(f"Initializing OPC connections '{urls}' ..."):
-        while not connections.initialized:
+        # wait until every server has connected or failed once; unreachable ones keep retrying in the background
+        while not connections.settled and len(connections.connections) > 0:
             time.sleep(0.1)
-        return connections
+    return connections
 
 # MARK: format_value
 def format_value(x: float | list[float], decis = 1) -> str:
@@ -995,7 +996,8 @@ class ConnectionsManager:
         self.connections = connections
 
     def disconnect_all(self):
-        self.connections.disconnect()
+        if self.connections is not None:
+            self.connections.disconnect()
 
 # MARK: Global ConnectionsManager
 connections_manager = ConnectionsManager()
@@ -1013,7 +1015,17 @@ def main():
     # based on an initial configuration file
     connections_manager.set_connections(connections)
 
+    # servers which are not reachable are retried in the background and show up on the next rerun
+    for url, error in connections.unreachable.items():
+        st.sidebar.warning(f"{url} not reachable, retrying: {error}")
     functional_units = connections.functional_units
+    if len(functional_units) == 0:
+        if len(connections.connections) == 0:
+            st.error("No enabled connections found in config.json (check 'enabled' and environment variables, see log).")
+        else:
+            st.error("No LADS OPC UA server reachable yet. Retrying in the background - reload to refresh.")
+        st.button("Reload")
+        st.stop()
 
     # session state
     functional_unit_names = list(map(lambda functional_unit: functional_unit.at_name, functional_units))

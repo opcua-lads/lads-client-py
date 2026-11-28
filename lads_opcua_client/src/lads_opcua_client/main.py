@@ -2780,6 +2780,8 @@ async def get_properties_and_variables(node: LADSNode) -> list[BaseVariable]:
     variables.extend(properties)
     return await asyncio.gather(*(BaseVariable.promote(variable, node.server) for variable in variables))
 
+RECONNECT_SECONDS = 2
+
 # MARK: Connection
 class Connection:
     """
@@ -2820,6 +2822,7 @@ class Connection:
         self.user = user
         self.password = password
         self.running = False
+        self.last_error: str | None = None
         self.thread = threading.Thread(target=self._run_connection, daemon=True, name=f"LADS OPC UA Connection {url}")
         #self.thread.start()
 
@@ -2831,6 +2834,11 @@ class Connection:
         else:
             return self.server.initialized
     
+    @property
+    def settled(self) -> bool:
+        """True once the first connection attempt has either succeeded or failed."""
+        return self.initialized or self.last_error is not None
+
     def _run_connection(self):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -2852,17 +2860,32 @@ class Connection:
         self.running = True
         self.thread.start()
     
+    def stop(self):
+        """Requests the connection thread to stop without waiting for it."""
+        self.running = False
+
     def disconnect(self):
         """Disconnects the server and stops the thread (non-asynchronous)."""
-        if self.server is not None:
-            if self.server.running:
-                print(f"Disconnecting from {self.server.name}...", end="")
-                self.running = False
-                self.thread.join()
-                while self.server.initialized:
-                    time.sleep(0.1)
-                print(f"Done!")
-    
+        self.stop()
+        if self.thread.is_alive():
+            print(f"Disconnecting from {self.url}...", end="")
+            self.thread.join(timeout=10)
+            print("Done!")
+
+    async def _sleep_while_running(self, seconds: float):
+        """Sleeps, but wakes up early when the connection is asked to stop."""
+        end = time.monotonic() + seconds
+        while self.running and time.monotonic() < end:
+            await asyncio.sleep(0.1)
+
+    def _report_error(self, error: Exception, unexpected: bool = False):
+        """Logs a connection problem once per distinct message instead of on every retry."""
+        message = str(error) or type(error).__name__
+        if message != self.last_error:
+            _logger.warning(f"{self.url}: {message} - retrying every {RECONNECT_SECONDS} s",
+                            exc_info=error if unexpected else None)
+        self.last_error = message
+
     async def _run_connection_async(self):
         while self.running:
             self.client = Client(self.url)
@@ -2873,18 +2896,21 @@ class Connection:
             try:
                 async with self.client:
                     await self.server.init()
+                    self.last_error = None
                     while self.server.running and self.running:
                         await self.server.evaluate()
                         await self.client.check_connection()
                     if self.server.running:
                         self.server.running = False
                         self.server.initialized = False
-            except (TimeoutError, ConnectionError, ua.UaError) as error:
-                _logger.warning(f"Reconnecting in 2 seconds: {error}")
-                await asyncio.sleep(2)
-            #except Exception as error:
-                # _logger.error(error)
-                
+            except (OSError, ua.UaError) as error:
+                # OSError covers TimeoutError, ConnectionError and asyncio's "Multiple exceptions" (IPv4/IPv6)
+                self._report_error(error)
+                await self._sleep_while_running(RECONNECT_SECONDS)
+            except Exception as error:
+                self._report_error(error, unexpected=True)
+                await self._sleep_while_running(RECONNECT_SECONDS)
+
 def get_value(data: dict, key: str) -> any:
     if key in data:
         return data[key]
@@ -2932,8 +2958,6 @@ class Connections:
             Disconnects from all server connections (non-asynchronous).
     """
 
-    connections: list[Connection] = []
-
     def __init__(self, config_file = "config.json") -> None:
         """
         Initializes the connections with the given configuration file.
@@ -2942,23 +2966,30 @@ class Connections:
             config_file (str): The path to the configuration file. Defaults to "config.json".
         """
 
+        self.connections: list[Connection] = []
         try:
             with open(config_file) as f:
                 print(f"parsing config file {config_file}")
                 data = json.load(f)
-                for connection in data["connections"]:
-                    enabled = get_value(connection, "enabled")
-                    if enabled is None:
-                        enabled = True
-                    if not enabled:
-                        continue
-                    url = expand_env(connection["url"])
-                    user = expand_env(get_value(connection, "user"))
-                    password = expand_env(get_value(connection, "password"))
-                    print(f"Add conncetion with url {url}")
-                    self.add(url, user, password)
         except Exception as error:
             _logger.error(f"Invalid config file {config_file}: {error}")
+            return
+        for connection in data.get("connections", []):
+            enabled = get_value(connection, "enabled")
+            if enabled is None:
+                enabled = True
+            if not enabled:
+                continue
+            try:
+                url = expand_env(connection["url"])
+                user = expand_env(get_value(connection, "user"))
+                password = expand_env(get_value(connection, "password"))
+            except (KeyError, TypeError) as error:
+                # skip only the affected connection, e.g. when an environment variable is not set
+                _logger.error(f"Skipping connection {get_value(connection, 'url')}: {error}")
+                continue
+            print(f"Add conncetion with url {url}")
+            self.add(url, user, password)
 
     def add(self, url: str, user: str = None, password: str = None) -> Connection:
         """
@@ -2982,12 +3013,28 @@ class Connections:
     def disconnect(self):
         """Disconnects the server/s (non-asynchronous)."""
         for connection in self.connections:
-            if connection.server is not None:
-                connection.disconnect()
+            connection.stop()
+        for connection in self.connections:
+            connection.disconnect()
 
     @property
     def urls(self) -> list[str]:
         return list(map(lambda connection: connection.url, self.connections))
+
+    @property
+    def settled(self) -> bool:
+        """True once every connection has either been initialized or failed its first attempt."""
+        return len(self.connections) > 0 and all(connection.settled for connection in self.connections)
+
+    @property
+    def any_initialized(self) -> bool:
+        return any(connection.initialized for connection in self.connections)
+
+    @property
+    def unreachable(self) -> dict[str, str]:
+        """URLs of connections that are not initialized (yet), with their last error. They keep retrying."""
+        return {connection.url: connection.last_error for connection in self.connections
+                if not connection.initialized and connection.last_error is not None}
 
     @property
     def initialized(self) -> bool:
@@ -3001,7 +3048,7 @@ class Connections:
     @property
     def functional_units(self) -> list[FunctionalUnit]:
         result: list[FunctionalUnit] = []
-        if self.initialized:
-            for connection in self.connections:
+        for connection in self.connections:
+            if connection.initialized:
                 result.extend(connection.server.functional_units)
         return result
