@@ -33,42 +33,49 @@ source .venv/bin/activate
 ```
 See the [Python Packaging User Guide](https://packaging.python.org/en/latest/guides/installing-using-pip-and-virtual-environments/) for more information on creating and managing a Python virtual environment.
 
-## Build Library
-The [build](https://pypi.org/project/python-build/) library is required to build the libraries. It can be installed with the following command:
+## Direct PyPI Install
+Both the [client](https://pypi.org/project/lads-opcua-client/) and [viewer](https://pypi.org/project/lads-opcua-viewer/) libraries are published on [PyPi](https://pypi.org/) and can be installed with the following commands:
+```bash
+pip install lads-opcua-client
+pip install lads-opcua-viewer
+```
+
+## Build Libraries from Source
+The [build](https://pypi.org/project/python-build/) library is required to build the libraries from source. It can be installed with the following command:
 ```bash
 pip install build
 ```
 Within the /dev folder you will find powershell und bash scripts which help to automate the steps which are outlined in the following.
 
-## Client Library
+### Client Library
 The *[lads_opcua_client](https://github.com/opcua-lads/lads-client-py/tree/main/lads_opcua_client)* library can be build and installed with the following command for Windows users:
 ```bash
 cd lads_opcua_client
 py -m build
-pip install dist/lads_opcua_client-0.0.1.tar.gz
+pip install dist/lads_opcua_client-0.1.0.tar.gz
 ```
 for Linux users:
 ```bash
 cd lads_opcua_client
 python3 -m build
-pip install dist/lads_opcua_client-0.0.1.tar.gz
+pip install dist/lads_opcua_client-0.1.0.tar.gz
 ```
 
-## Viewer Library
+### Viewer Library
 The *[lads_opcua_viewer](https://github.com/opcua-lads/lads-client-py/tree/main/lads_opcua_viewer)* library requires the client library to be installed in the same environment. The viewer library can be build and installed with the following command for Windows users:
 ```bash
 cd lads_opcua_viewer
 py -m build
-pip install dist/lads_opcua_viewer-0.0.1.tar.gz
+pip install dist/lads_opcua_viewer-0.1.0.tar.gz
 ```
 for Linux users:
 ```bash
 cd lads_opcua_viewer
 python3 -m build
-pip install dist/lads_opcua_viewer-0.0.1.tar.gz
+pip install dist/lads_opcua_viewer-0.1.0.tar.gz
 ```
 
-## Build & Install Scripts
+### Build & Install Scripts
 The /dev folder contains scripts which ease building and installing the packages for client and viewer.
 For Windows users they are written as powershell scripts: for Linux users as bash scripts.
 ```bash
